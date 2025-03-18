@@ -4,7 +4,8 @@
 Ce sont les notes que j'ai (Yann) pris lors de mes recherches pour la création du logicielle. Les étapes présentes sont écrites dans l'ordre chonologique où je les ai exécutées
 
 ## Sources
-[Vidéo YouTube](https://www.youtube.com/watch?v=ctQMqqEo4G8)
+[Création du projet Flask + React à l'aide de Vite](https://www.youtube.com/watch?v=ctQMqqEo4G8)
+[Build du projet Flask + React pour déploiement](https://www.youtube.com/watch?v=tvcWCQqLegM)
 
 
 # Création du projet Flask + React
@@ -39,6 +40,7 @@ from flask_cors import CORS
 ```
 
 ## Installer axios :
+
 ```bash
 npm install axios
 ```
@@ -48,6 +50,29 @@ Dans le fichier client/src/app, modifier la première ligne pour ajouter la libr
 ```jsx
 import { useState, useEffect } from 'react'
 ```
+# Build du projet pour déploiement
+
+### Frontend :
+```bash
+npm run build
+```
+### Backend :
+Dans le fichier main.py :
+```python
+from flask import Flask, jsonify, send_from_directory
+
+
+@app.route("/")
+def home():
+    return send_from_directory(app.static_folder, "index.html")
+
+```
+
+### Lancer le serveur
+```bash
+python3 main.py
+```
+
 
 # Gestion de la webcam
 

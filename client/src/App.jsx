@@ -7,6 +7,8 @@ import axios from 'axios';
 function App() {
   const [count, setCount] = useState(0)
   const [array, setArray] = useState([])
+  const [sliderValue1, setSliderValue1] = useState(50); // Valeur initiale du slider
+  const [sliderValue2, setSliderValue2] = useState(50); // Valeur initiale du slider
 
   const fetchAPI = async () => {
     const response = await axios.get("http://localhost:8080/api/users");
@@ -40,6 +42,38 @@ function App() {
             </div>
           ))}
       </div>
+
+      <div className="video-container">
+        <h2>Flux vidéo</h2>
+        <img src="http://localhost:8080/video_feed" alt="Flux vidéo en direct" />
+      </div>
+
+      {/* Slider */}
+      <div className='sliders-container'>
+        <div className="slider-wrapper">
+          <input
+            type="range"
+            min="0"
+            max="100"
+            value={sliderValue1}
+            onChange={(e) => setSliderValue1(e.target.value)}
+            className = "slider"
+            />
+          <p>Valeur du slider : {sliderValue1}</p>
+        </div>
+        <div className="slider-wrapper">
+          <input
+            type="range"
+            min="0"
+            max="100"
+            value={sliderValue2}
+            onChange={(e) => setSliderValue2(e.target.value)}
+            className = "slider"
+            />
+          <p>Valeur du slider : {sliderValue2}</p>
+        </div>
+      </div>
+
       <p className="read-the-docs">
         Click on the Vite and React logos to learn more
       </p>
