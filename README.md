@@ -48,3 +48,10 @@ Dans le fichier client/src/app, modifier la première ligne pour ajouter la libr
 ```jsx
 import { useState, useEffect } from 'react'
 ```
+
+# Gestion de la webcam
+
+## Installation d'OpenCV en Python
+```bash
+pip3 install opencv-python
+```
