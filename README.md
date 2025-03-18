@@ -75,6 +75,12 @@ def home():
 python3 main.py
 ```
 
+# Installation de Tailwindcss
+Tailwind sera utilisé plus tard pour l'interface, mais l'installation a déjà été effectuée.
+
+[Guide officiel](https://tailwindcss.com/docs/installation/using-vite)
+
+
 
 # Gestion de la webcam
 
@@ -82,3 +88,4 @@ python3 main.py
 ```bash
 pip3 install opencv-python
 ```
+
