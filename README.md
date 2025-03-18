@@ -5,8 +5,10 @@ Ce sont les notes que j'ai (Yann) pris lors de mes recherches pour la création 
 
 ## Sources
 [Création du projet Flask + React à l'aide de Vite](https://www.youtube.com/watch?v=ctQMqqEo4G8)
+
 [Build du projet Flask + React pour déploiement](https://www.youtube.com/watch?v=tvcWCQqLegM)
 
+[Contrôle de la webcam avec OpenCV](https://www.youtube.com/watch?v=sd25t4HmFdU)
 
 # Création du projet Flask + React
 

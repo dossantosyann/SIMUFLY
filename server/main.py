@@ -6,7 +6,8 @@ import cv2
 app = Flask(__name__)
 cors = CORS(app, origins="*")
 
-camera = cv2.VideoCapture(1)  # Capture depuis la webcam
+camera = cv2.VideoCapture(0)  # Capture depuis la webcam
+
 
 def generate_frames():
     while True:
