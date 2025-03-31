@@ -89,3 +89,30 @@ Tailwind sera utilisé plus tard pour l'interface, mais l'installation a déjà 
 pip3 install opencv-python
 ```
 
+
+
+
+
+# Installation Windows fraîche
+WSL ne permet pas d'utiliser une Webcam, il faut programmer du python directement dans Windows.
+
+J'ai refait une installation fraîche de Windows, voici tout ce que j'ai du installer dans l'ordre pour que ça fonctionne :
+```bash
+wsl --install
+sudo apt install python3-venv
+pip install opencv-python
+```
+À partir de là, la webcam ne semblait pas fonctionner à travers WSL. J'ai donc installé usbipd-win pour pouvoir accorder l'accès à mon port USB à WSL (je n'ai pas eu ce soucis sur MacOS).
+
+https://github.com/dorssel/usbipd-win
+
+```bash
+winget install usbipd (dans CMD Windows)
+
+
+usbipd list
+usbipd bind --busid=<BUSID>
+usbipd attach --wsl --busid=X-X
+```
+
+J'ai ensuite utilisé lsusb de usb-utils pour afficher la liste des périphériques USB connectés

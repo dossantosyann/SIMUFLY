@@ -3,14 +3,15 @@ import time
 
 from server.camlib import *
 
-cam = Webcam()
+#cam = Webcam()
 #cam.takePic("ma_photo.jpg")  # Capture une image
 #cam.stop()  # Ferme la webcam proprement
 
 
-""" # Initialiser la webcam (0 pour la webcam par défaut)
+ # Initialiser la webcam (0 pour la webcam par défaut)
 cap = cv2.VideoCapture(0)
 
+"""
 # Pour régler le gain et le temps d'exposition
 # Les propriétés exactes peuvent varier selon votre webcam
 cap.set(cv2.CAP_PROP_GAIN, 50)  # Régler le gain (valeur entre 0-100)
