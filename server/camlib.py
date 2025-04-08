@@ -1,21 +1,37 @@
 import cv2
-import threading
 import platform
+import os
+import threading
+
+# Utiliser multiprocessing uniquement si nécessaire et avec les précautions adéquates
+import multiprocessing as mp
 
 class Webcam:
     def __init__(self, camera_index=0):
         """Initialise la webcam et démarre la capture vidéo."""
+        self.camera_index = camera_index
         self.cap = cv2.VideoCapture(camera_index)
 
         if not self.cap.isOpened():
             raise Exception("Impossible d'ouvrir la webcam")
 
         self._set_max_resolution()  # Appliquer la meilleure résolution
-
+        
+        # Stocker les dimensions des images
+        self.width = int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        self.height = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        
+        # Capturer une image de référence
+        ret, frame = self.cap.read()
+        if ret:
+            self.frame = frame
+        else:
+            self.frame = None
+            
+        # Flux actif
         self.running = True
-        self.frame = None
-
-        # Thread pour capturer les images
+        
+        # Thread pour capturer les images en arrière-plan (plus léger que multiprocessing)
         self.thread = threading.Thread(target=self._capture_frames, daemon=True)
         self.thread.start()
 
@@ -38,13 +54,33 @@ class Webcam:
 
         print("⚠ Impossible d'appliquer une haute résolution, utilisation de la valeur par défaut.")
 
-
     def _capture_frames(self):
         """Capture les images en arrière-plan."""
         while self.running:
             ret, frame = self.cap.read()
             if ret:
                 self.frame = frame  # Stocke l'image actuelle
+
+    def generate_frames(self):
+        """Générateur pour le streaming web."""
+        while True:
+            if self.frame is not None:
+                # Utiliser la dernière image capturée par le thread
+                frame = self.frame.copy()
+                ret, buffer = cv2.imencode('.jpg', frame)
+                if ret:
+                    frame_bytes = buffer.tobytes()
+                    yield (b'--frame\r\n'
+                        b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
+            else:
+                # Capturer une nouvelle image si aucune n'est disponible
+                ret, frame = self.cap.read()
+                if ret:
+                    ret, buffer = cv2.imencode('.jpg', frame)
+                    if ret:
+                        frame_bytes = buffer.tobytes()
+                        yield (b'--frame\r\n'
+                            b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
 
     def show_video(self):
         """Affiche le flux vidéo et détecte les touches ('p' pour photo, 'q' pour quitter)."""
@@ -58,28 +94,31 @@ class Webcam:
             elif key == ord('q'):
                 self.stop()  # Quitter
 
-    def generate_frames(self):
-        while True:
-            success, frame = self.cap.read()
-            if not success:
-                break
-            else:
-                ret, buffer = cv2.imencode('.jpg', frame)
-                frame = buffer.tobytes()
-                yield (b'--frame\r\n'
-                    b'Content-Type: image/jpeg\r\n\r\n' + frame + b'\r\n')
-
     def takePic(self, filename="photo.jpg"):
         """Capture et enregistre une photo sans bloquer la vidéo."""
         if self.frame is not None:
             cv2.imwrite(filename, self.frame)
             print(f"📸 Photo enregistrée : {filename}")
         else:
-            print("❌ Erreur : aucune image disponible !")
+            # Si aucune image n'est disponible en cache, en capturer une nouvelle
+            ret, frame = self.cap.read()
+            if ret:
+                cv2.imwrite(filename, frame)
+                print(f"📸 Photo enregistrée : {filename}")
+            else:
+                print("❌ Erreur : aucune image disponible !")
 
     def stop(self):
         """Arrête la webcam proprement."""
         self.running = False
-        self.cap.release()
+        
+        # Attendre que le thread se termine
+        if hasattr(self, 'thread') and self.thread.is_alive():
+            self.thread.join(timeout=1)
+            
+        # Libérer les ressources
+        if hasattr(self, 'cap') and self.cap is not None:
+            self.cap.release()
+            
         cv2.destroyAllWindows()
         print("📷 Webcam arrêtée.")
