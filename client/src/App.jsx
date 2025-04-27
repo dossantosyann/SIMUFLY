@@ -1,88 +1,85 @@
-import { useState, useEffect } from 'react'
+import { useState } from 'react'
 import heigLogo from './assets/heigLogo.svg'
 import './App.css'
 import axios from 'axios';
 
 function App() {
-  const [count, setCount] = useState(0)
-  const [array, setArray] = useState([])
-  const [sliderValue1, setSliderValue1] = useState(50); // Valeur initiale du slider
-  const [sliderValue2, setSliderValue2] = useState(50); // Valeur initiale du slider
-  const [pictureFlag, setPictureFlag] = useState("");
+  const [movementMode, setMovementMode] = useState("");
+  const [shootingMode, setShootingMode] = useState("");
 
-  const fetchAPI = async () => {
-    const response = await axios.get("http://localhost:8080/api/users");
-    console.log(response.data.users);
-    setArray(response.data.users);
+  const handleMovementSelection = (mode) => {
+    setMovementMode(mode);
   };
 
-  const sendFlag = async () => {
-    try { const response = await axios.post("http://localhost:8080/take_picture", {
-        flag: "mon super flag",
-      });
-      setPictureFlag(response.data.pictureFlag);
-    } catch(error) {
-      console.error("Erreur :", error);
-      setPictureFlag("Erreur lors de l'envoi du flag");
-    }
+  const handleShootingSelection = (mode) => {
+    setShootingMode(mode);
   };
-
-  useEffect(() => {
-    fetchAPI();
-  }, []);
 
   return (
     <>
-      <div>
-        <a href="https://heig-vd.ch" target="_blank">
-          <img src={heigLogo} className="logo" alt="HEIG logo" />
-        </a>
-      </div>
+      <h1>Drone Simulator</h1>
 
-      <div>
-            <button onClick={sendFlag}>Envoyer le Flag</button>
-            {pictureFlag && <p>{pictureFlag}</p>}
-      </div>
-
-      <h1>Drone simulator</h1>
-      <div className="card">
-        <button onClick={() => setCount((count) => count + 1)}>
-          count is {count}
-        </button>
-      </div>
-
+      {/* Flux vidéo toujours visible */}
       <div className="video-container">
         <h2>Flux vidéo</h2>
         <img src="http://localhost:8080/video_feed" alt="Flux vidéo en direct" />
       </div>
 
-      {/* Slider */}
-      <div className='sliders-container'>
-        <div className="slider-wrapper">
-          <input
-            type="range"
-            min="0"
-            max="100"
-            value={sliderValue1}
-            onChange={(e) => setSliderValue1(e.target.value)}
-            className = "slider"
-            />
-          <p>Valeur du slider : {sliderValue1}</p>
-        </div>
-        <div className="slider-wrapper">
-          <input
-            type="range"
-            min="0"
-            max="100"
-            value={sliderValue2}
-            onChange={(e) => setSliderValue2(e.target.value)}
-            className = "slider"
-            />
-          <p>Valeur du slider : {sliderValue2}</p>
-        </div>
+      {/* Section choix du mode de déplacement */}
+      <div className="mode-title">
+        <h2>Mode de déplacement :</h2>
+      </div>
+      <div className="button-row fade-in-up">
+        <button
+          className={`base-button ${movementMode === "auto" ? "selected-button" : ""}`}
+          onClick={() => handleMovementSelection("auto")}
+        >
+          Automatique
+        </button>
+
+        <button
+          className={`base-button ${movementMode === "file" ? "selected-button" : ""}`}
+          onClick={() => handleMovementSelection("file")}
+        >
+          À partir d'un fichier
+        </button>
+
+        <button
+          className={`base-button ${movementMode === "step" ? "selected-button" : ""}`}
+          onClick={() => handleMovementSelection("step")}
+        >
+          Pas à pas
+        </button>
+      </div>
+
+      {/* Section choix du mode de prise de vue */}
+      <div className="mode-title fade-in-up" style={{ marginTop: '30px' }}>
+        <h2>Mode de prise de vue :</h2>
+      </div>
+      <div className="button-row fade-in-up">
+        <button
+          className={`base-button ${shootingMode === "auto" ? "selected-button" : ""}`}
+          onClick={() => handleShootingSelection("auto")}
+        >
+          Automatique
+        </button>
+
+        <button
+          className={`base-button ${shootingMode === "manual" ? "selected-button" : ""}`}
+          onClick={() => handleShootingSelection("manual")}
+        >
+          Manuel
+        </button>
+
+        <button
+          className={`base-button ${shootingMode === "file" ? "selected-button" : ""}`}
+          onClick={() => handleShootingSelection("file")}
+        >
+          À partir d'un fichier
+        </button>
       </div>
     </>
-  )
+  );
 }
 
-export default App
+export default App;

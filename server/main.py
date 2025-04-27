@@ -10,7 +10,7 @@ if __name__ == "__main__":
     mp.freeze_support()
     
     # Maintenant on peut importer notre classe avec sécurité
-    from camlib import Webcam
+    from control_lib import Webcam
     
     app = Flask(__name__)
     CORS(app, origins="*")
