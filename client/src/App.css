@@ -70,7 +70,17 @@ p {
     color: #7e7e7e;
 }
 
-.video-container img {
+/* Styles pour le conteneur vidéo et le placeholder */
+.video-container {
+    width: 100%;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    margin-bottom: 20px;
+    position: relative;
+  }
+  
+  .video-container img {
     width: 720px;
     height: auto;
     border: 3px solid #ff7b00;
@@ -78,7 +88,30 @@ p {
     box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
     padding: 3px;
     background-color: white;
-}
+  }
+  
+  .video-placeholder {
+    width: 720px;
+    height: 405px; /* Ratio 16:9 basé sur la largeur de 720px */
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    border: 3px solid #ff7b00;
+    border-radius: 5px;
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+    padding: 3px;
+    background-color: white;
+  }
+  
+  .placeholder-text {
+    color: #000000;
+    font-weight: bold;
+    font-size: 1.5rem;
+    text-align: center;
+    padding: 20px;
+  }
+
+
 
 .video-placeholder {
     width: 720px;
@@ -303,6 +336,24 @@ button:focus {
 }
 
 .capture-button:hover {
+    background: linear-gradient(90deg, #ff4500, #ffaa00);
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
+    transform: translateY(-2px);
+}
+
+.generate-button {
+    padding: 10px 20px;
+    background: linear-gradient(90deg, #ff7b00, #ffdd00);
+    color: white;
+    border: none;
+    border-radius: 5px;
+    cursor: pointer;
+    font-weight: bold;
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.2);
+    transition: all 0.3s ease;
+}
+
+.generate-button:hover {
     background: linear-gradient(90deg, #ff4500, #ffaa00);
     box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
     transform: translateY(-2px);

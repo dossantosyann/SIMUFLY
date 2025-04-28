@@ -1,7 +1,9 @@
-from flask import Flask, jsonify, send_from_directory, Response, request
+from flask import Flask, jsonify, send_from_directory, Response, request, make_response, send_file
 from flask_cors import CORS
 import cv2
 import os
+import io
+import json
 import multiprocessing as mp
 
 # Importer Webcam uniquement après avoir configuré l'environnement
@@ -203,6 +205,32 @@ if __name__ == "__main__":
         return jsonify({
             "message": "Capture effectué",
         }), 200
+        
+    @app.route('/generate_file', methods=['POST'])
+    def generate_file():
+        print("\n⚡️ BOUTON GENERATE")
+        
+        dummy_data = {
+            "points": [
+                {"x": 0, "y": 0},
+                {"x": 10, "y": 20},
+                {"x": 20, "y": 40}
+            ],
+            "info": "Fichier de déplacement généré automatiquement"
+        }
+        file_content = json.dumps(dummy_data, indent=4)
+        buffer = io.BytesIO()
+        buffer.write(file_content.encode('utf-8'))
+        buffer.seek(0)
+
+        response = make_response(send_file(
+            buffer,
+            as_attachment=True,
+            download_name='deplacement.json',
+            mimetype='application/json'
+        ))
+        response.headers['Access-Control-Expose-Headers'] = 'Content-Disposition'
+        return response
 
     # Assurer que les ressources sont libérées à la fin
     import atexit

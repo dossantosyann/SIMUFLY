@@ -11,36 +11,23 @@ function App() {
   const [fileName, setFileName] = useState("Aucun fichier sélectionné");
   const [stepX, setStepX] = useState("");
   const [stepY, setStepY] = useState("");
-  const [videoConnected, setVideoConnected] = useState(false);
+  const [videoError, setVideoError] = useState(false);
   const videoRef = useRef(null);
 
-  useEffect(() => {
-    // Fonction pour vérifier si l'image est chargée correctement
-    const checkVideoConnection = () => {
-      const img = videoRef.current;
-      if (img) {
-        img.onerror = () => {
-          setVideoConnected(false);
-        };
-        img.onload = () => {
-          setVideoConnected(true);
-        };
-      }
-    };
-    
-    checkVideoConnection();
-    
-    // Vérifier régulièrement la connexion vidéo
-    const interval = setInterval(() => {
-      // Forcer le rechargement de l'image pour vérifier à nouveau
-      if (videoRef.current) {
-        const timestamp = new Date().getTime();
-        videoRef.current.src = `http://localhost:8080/video_feed?t=${timestamp}`;
-      }
-    }, 10000); // Vérifier toutes les 10 secondes
-    
-    return () => clearInterval(interval);
-  }, []);
+  // Ajout d'un gestionnaire d'erreur pour l'image/vidéo
+  const handleVideoError = () => {
+    setVideoError(true);
+  };
+
+  // Essayer à nouveau de charger la vidéo si elle devient disponible
+  const retryVideo = () => {
+    setVideoError(false);
+    if (videoRef.current) {
+      videoRef.current.src = `http://localhost:8080/video_feed?timestamp=${new Date().getTime()}`;
+    }
+  };
+
+  // Le reste de votre code reste inchangé...
 
   const handleMovementSelection = (mode) => {
     setMovementMode(mode);
@@ -88,6 +75,8 @@ function App() {
     axios.post('http://localhost:8080/execute', formData, config)
       .then(response => {
         console.log("Réponse du serveur:", response.data);
+        // Réessayer de charger la vidéo après l'exécution
+        retryVideo();
       })
       .catch(error => {
         console.error("Erreur lors de l'exécution:", error);
@@ -107,6 +96,8 @@ function App() {
     axios.post('http://localhost:8080/move_step', moveData)
       .then(response => {
         console.log("Réponse du serveur:", response.data);
+        // Réessayer de charger la vidéo après le déplacement
+        retryVideo();
       })
       .catch(error => {
         console.error("Erreur lors du déplacement:", error);
@@ -137,23 +128,45 @@ function App() {
     return true;
   };
 
+  const handleGenerateFile = async () => {
+    try {
+      const response = await axios.post('http://localhost:8080/generate_file', {}, {
+        responseType: 'blob', // Important pour bien récupérer le fichier binaire
+      });
+
+      const blob = new Blob([response.data], { type: 'application/json' });
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.setAttribute('download', 'deplacement.json');
+      document.body.appendChild(link);
+      link.click();
+      link.parentNode.removeChild(link);
+    } catch (error) {
+      console.error('Erreur lors de la génération du fichier:', error);
+    }
+  };
+
+
   return (
     <>
       <h1>Simulateur de prise de vue par drone</h1>
 
       {/* Flux vidéo avec message de fallback */}
       <div className="video-container">
-        {videoConnected ? (
-          <img 
-            ref={videoRef}
-            src="http://localhost:8080/video_feed" 
-            alt="Flux vidéo en direct" 
-            onError={() => setVideoConnected(false)}
-          />
-        ) : (
+        {videoError ? (
           <div className="video-placeholder">
-            <p>Aucun flux vidéo disponible</p>
+            <div className="placeholder-text">
+              Aucun flux vidéo disponible
+            </div>
           </div>
+        ) : (
+          <img
+            ref={videoRef}
+            src="http://localhost:8080/video_feed"
+            alt="Flux vidéo en direct"
+            onError={handleVideoError}
+          />
         )}
       </div>
 
@@ -161,6 +174,8 @@ function App() {
       <div className="mode-title">
         <h2>Mode de déplacement :</h2>
       </div>
+
+      {/* Votre code existant continue ici... */}
       <div className="button-row fade-in-up">
         <button
           className={`base-button ${movementMode === "auto" ? "selected-button" : ""}`}
@@ -184,6 +199,7 @@ function App() {
         </button>
       </div>
 
+      {/* Le reste de votre code JSX ici... */}
       {movementMode === "auto" && (
         <div className="parameter-zone fade-in-up">
           <label htmlFor="autoParam">Nombre d'images à capturer :</label>
@@ -200,6 +216,13 @@ function App() {
             }}
             placeholder="Entrez un nombre"
           />
+          <button
+            className='generate-button'
+            style={{ marginTop: '10px' }}
+            onClick={handleGenerateFile}
+          >
+            Générer le fichier de déplacement
+          </button>
         </div>
       )}
 
