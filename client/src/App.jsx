@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import heigLogo from './assets/heigLogo.svg'
 import './App.css'
 import axios from 'axios';
@@ -7,10 +7,40 @@ function App() {
   const [movementMode, setMovementMode] = useState("");
   const [shootingMode, setShootingMode] = useState("");
   const [autoMovementParam, setAutoMovementParam] = useState("");
-  const [selectedFile, setSelectedFile] = useState(null); // Nouvel état pour le fichier
-  const [fileName, setFileName] = useState("Aucun fichier sélectionné"); // Pour afficher le nom du fichier
+  const [selectedFile, setSelectedFile] = useState(null);
+  const [fileName, setFileName] = useState("Aucun fichier sélectionné");
   const [stepX, setStepX] = useState("");
   const [stepY, setStepY] = useState("");
+  const [videoConnected, setVideoConnected] = useState(false);
+  const videoRef = useRef(null);
+
+  useEffect(() => {
+    // Fonction pour vérifier si l'image est chargée correctement
+    const checkVideoConnection = () => {
+      const img = videoRef.current;
+      if (img) {
+        img.onerror = () => {
+          setVideoConnected(false);
+        };
+        img.onload = () => {
+          setVideoConnected(true);
+        };
+      }
+    };
+    
+    checkVideoConnection();
+    
+    // Vérifier régulièrement la connexion vidéo
+    const interval = setInterval(() => {
+      // Forcer le rechargement de l'image pour vérifier à nouveau
+      if (videoRef.current) {
+        const timestamp = new Date().getTime();
+        videoRef.current.src = `http://localhost:8080/video_feed?t=${timestamp}`;
+      }
+    }, 10000); // Vérifier toutes les 10 secondes
+    
+    return () => clearInterval(interval);
+  }, []);
 
   const handleMovementSelection = (mode) => {
     setMovementMode(mode);
@@ -34,15 +64,12 @@ function App() {
   };
 
   const handleExecute = () => {
-    // Logique pour envoyer les modes sélectionnés au backend
     console.log("Exécution avec mode de déplacement:", movementMode, "et mode de prise de vue:", shootingMode);
 
-    // Créer un objet FormData pour l'envoi de fichier
     const formData = new FormData();
     formData.append('movementMode', movementMode);
     formData.append('shootingMode', shootingMode);
 
-    // Ajouter les paramètres spécifiques selon le mode
     if (movementMode === "auto") {
       formData.append('autoMovementParam', autoMovementParam);
     } else if (movementMode === "file" && selectedFile) {
@@ -52,18 +79,15 @@ function App() {
       formData.append('stepY', stepY);
     }
 
-    // Configuration pour l'envoi du fichier
     const config = {
       headers: {
         'Content-Type': 'multipart/form-data'
       }
     };
 
-    // Envoi au serveur
     axios.post('http://localhost:8080/execute', formData, config)
       .then(response => {
         console.log("Réponse du serveur:", response.data);
-        // Traitement de la réponse
       })
       .catch(error => {
         console.error("Erreur lors de l'exécution:", error);
@@ -71,18 +95,15 @@ function App() {
   };
 
   const handleMove = () => {
-    // Vérifie que les valeurs sont valides
     if (!stepX || !stepY) return;
 
-    // Crée un objet avec les données à envoyer
     const moveData = {
       movementMode: "step",
       stepX: parseInt(stepX),
       stepY: parseInt(stepY),
-      flag: "step_movement_flag" // Flag pour identifier le déplacement pas à pas
+      flag: "step_movement_flag"
     };
 
-    // Envoie les données au serveur
     axios.post('http://localhost:8080/move_step', moveData)
       .then(response => {
         console.log("Réponse du serveur:", response.data);
@@ -93,16 +114,13 @@ function App() {
   };
 
   const handleCapture = () => {
-    // Vérifie que les valeurs sont valides
     if (!stepX || !stepY) return;
 
-    // Crée un objet avec les données à envoyer
     const moveData = {
       movementMode: "step",
-      flag: "step_capture_flag" // Flag pour identifier le déplacement pas à pas
+      flag: "step_capture_flag"
     };
 
-    // Envoie les données au serveur
     axios.post('http://localhost:8080/capture_step', moveData)
       .then(response => {
         console.log("Réponse du serveur:", response.data);
@@ -112,7 +130,6 @@ function App() {
       });
   };
 
-  // Vérifiez si les deux modes sont sélectionnés ET les paramètres nécessaires sont fournis
   const canExecute = () => {
     if (movementMode === "" || shootingMode === "") return false;
     if (movementMode === "auto" && autoMovementParam === "") return false;
@@ -122,15 +139,25 @@ function App() {
 
   return (
     <>
-      <h1>Drone Simulator</h1>
+      <h1>Simulateur de prise de vue par drone</h1>
 
-      {/* Flux vidéo toujours visible */}
+      {/* Flux vidéo avec message de fallback */}
       <div className="video-container">
-        <h2>Flux vidéo</h2>
-        <img src="http://localhost:8080/video_feed" alt="Flux vidéo en direct" />
+        {videoConnected ? (
+          <img 
+            ref={videoRef}
+            src="http://localhost:8080/video_feed" 
+            alt="Flux vidéo en direct" 
+            onError={() => setVideoConnected(false)}
+          />
+        ) : (
+          <div className="video-placeholder">
+            <p>Aucun flux vidéo disponible</p>
+          </div>
+        )}
       </div>
 
-      {/* Section choix du mode de déplacement */}
+      {/* Le reste du code reste inchangé */}
       <div className="mode-title">
         <h2>Mode de déplacement :</h2>
       </div>
@@ -157,19 +184,16 @@ function App() {
         </button>
       </div>
 
-      {/* Zone de paramètres pour le mode automatique */}
       {movementMode === "auto" && (
         <div className="parameter-zone fade-in-up">
           <label htmlFor="autoParam">Nombre d'images à capturer :</label>
           <input
-            type="text"  // On utilise "text" pour mieux contrôler l'input
+            type="text"
             id="autoParam"
             value={autoMovementParam}
             onChange={(e) => {
               const val = e.target.value;
-              // Autorise uniquement les chiffres et supprime tout le reste
               const filteredVal = val.replace(/[^0-9]/g, '');
-              // Met à jour l'état uniquement si c'est un nombre valide >0 ou vide
               if (filteredVal === "" || parseInt(filteredVal) > 0) {
                 setAutoMovementParam(filteredVal);
               }
@@ -179,7 +203,6 @@ function App() {
         </div>
       )}
 
-      {/* Zone pour upload de fichier JSON (mode "file") */}
       {movementMode === "file" && (
         <div className="parameter-zone file-upload-zone fade-in-up">
           <label htmlFor="fileUpload">Chargez un fichier JSON :</label>
@@ -208,11 +231,10 @@ function App() {
               value={stepX}
               onChange={(e) => {
                 let val = e.target.value.replace(/[^0-9-]/g, '');
-                // Supprime les '-' en double et ceux qui ne sont pas en première position
                 if (val.includes('-')) {
                   val = '-' + val.replace(/-/g, '');
                 }
-                setStepX(val); // ou setStepY
+                setStepX(val);
               }}
               placeholder="X"
             />
@@ -221,22 +243,21 @@ function App() {
               value={stepY}
               onChange={(e) => {
                 let val = e.target.value.replace(/[^0-9-]/g, '');
-                // Supprime les '-' en double et ceux qui ne sont pas en première position
                 if (val.includes('-')) {
                   val = '-' + val.replace(/-/g, '');
                 }
-                setStepY(val); // ou setStepY
+                setStepY(val);
               }}
               placeholder="Y"
             />
             <button
               onClick={handleMove}
               disabled={!stepX || !stepY}
-              className="move-button" // Même style que le bouton JSON
+              className="move-button"
               style={{
                 marginLeft: "10px",
                 padding: "8px 16px",
-                backgroundColor: !stepX || !stepY ? "#cccccc" : "#4CAF50" // Gris si désactivé
+                backgroundColor: !stepX || !stepY ? "#cccccc" : "#4CAF50"
               }}
             >
               Déplacer
@@ -244,11 +265,11 @@ function App() {
             <button
               onClick={handleCapture}
               disabled={!stepX || !stepY}
-              className="capture-button" // Même style que le bouton JSON
+              className="capture-button"
               style={{
                 marginLeft: "10px",
                 padding: "8px 16px",
-                backgroundColor: !stepX || !stepY ? "#cccccc" : "#4CAF50" // Gris si désactivé
+                backgroundColor: !stepX || !stepY ? "#cccccc" : "#4CAF50"
               }}
             >
               Capturer
@@ -257,7 +278,6 @@ function App() {
         </div>
       )}
 
-      {/* Section choix du mode de prise de vue */}
       <div className="mode-title fade-in-up" style={{ marginTop: '30px' }}>
         <h2>Mode de prise de vue :</h2>
       </div>
@@ -284,7 +304,6 @@ function App() {
         </button>
       </div>
 
-      {/* Bouton Exécuter */}
       <div className="button-row fade-in-up" style={{ marginTop: '40px' }}>
         <button
           className="button-row button"

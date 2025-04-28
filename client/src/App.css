@@ -80,6 +80,27 @@ p {
     background-color: white;
 }
 
+.video-placeholder {
+    width: 720px;
+    height: 405px; /* Ajustez selon vos besoins pour un format 16:9 */
+    border: 3px solid #ff7b00;
+    border-radius: 5px;
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+    padding: 3px;
+    background-color: white;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    margin: 0 auto;
+  }
+  
+  .video-placeholder p {
+    font-size: 24px;
+    font-weight: bold;
+    color: #000000;
+    text-align: center;
+  }
+
 .button-row {
     display: flex;
     justify-content: center;
@@ -182,9 +203,11 @@ button:focus {
 .parameter-zone input {
     padding: 10px;
     border: 2px solid #ffaa00;
+    background-color: white;
     border-radius: 5px;
     width: 80%;
     font-size: 1rem;
+    color: black;
     text-align: center;
 }
 
