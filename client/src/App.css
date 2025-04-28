@@ -104,7 +104,8 @@ p {
     border-radius: 10px;
     cursor: pointer;
     box-shadow: 0 4px 6px rgba(0, 0, 0, 0.2);
-    transition: transform 0.5s ease, background 0.5s ease, box-shadow 0.5s ease, color 0.5s ease; /* Une transition plus lente à la sortie */
+    transition: transform 0.5s ease, background 0.5s ease, box-shadow 0.5s ease, color 0.5s ease;
+    /* Une transition plus lente à la sortie */
 }
 
 .button-row button:hover,
@@ -113,10 +114,9 @@ p {
     background: linear-gradient(90deg, #ff4500, #ffaa00);
     box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
     color: #000;
-    transition: transform 0.3s ease, background 0.3s ease, box-shadow 0.3s ease, color 0.3s ease; /* Une transition rapide à l'entrée */
+    transition: transform 0.3s ease, background 0.3s ease, box-shadow 0.3s ease, color 0.3s ease;
+    /* Une transition rapide à l'entrée */
 }
-
-
 
 
 .mode-title {
@@ -139,6 +139,7 @@ p {
     color: black !important;
     border-radius: 8px;
     background-image: none !important;
+    border: 2px solid white !important;
 }
 
 /* Quand un bouton est sélectionné - RÉVISÉ */
@@ -155,4 +156,131 @@ p {
 
 button:focus {
     outline: none;
+}
+
+.parameter-zone {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    margin: 20px 0;
+    padding: 15px;
+    background-color: #f9f9f9;
+    border-radius: 8px;
+    border: 2px solid #ff7b00;
+    box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
+    max-width: 400px;
+    margin-left: auto;
+    margin-right: auto;
+}
+
+.parameter-zone label {
+    margin-bottom: 8px;
+    font-weight: bold;
+    color: #000000;
+}
+
+.parameter-zone input {
+    padding: 10px;
+    border: 2px solid #ffaa00;
+    border-radius: 5px;
+    width: 80%;
+    font-size: 1rem;
+    text-align: center;
+}
+
+.parameter-zone input:focus {
+    outline: none;
+    border-color: #ff7b00;
+    box-shadow: 0 0 5px rgba(255, 123, 0, 0.5);
+}
+
+.fade-in-up {
+    animation: fadeInUp 0.5s ease;
+}
+
+@keyframes fadeInUp {
+    from {
+        opacity: 0;
+        transform: translateY(20px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+
+.file-upload-zone {
+    padding-bottom: 20px;
+}
+
+.file-input-container {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-direction: column;
+    width: 100%;
+    gap: 10px;
+}
+
+.file-button {
+    padding: 10px 20px;
+    background: linear-gradient(90deg, #ff7b00, #ffdd00);
+    color: white;
+    border: none;
+    border-radius: 5px;
+    cursor: pointer;
+    font-weight: bold;
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.2);
+    transition: all 0.3s ease;
+}
+
+.file-button:hover {
+    background: linear-gradient(90deg, #ff4500, #ffaa00);
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
+    transform: translateY(-2px);
+}
+
+.file-name {
+    font-size: 0.9rem;
+    color: #666;
+    margin-top: 5px;
+    font-style: italic;
+}
+
+
+.move-button {
+    padding: 10px 20px;
+    background: linear-gradient(90deg, #ff7b00, #ffdd00);
+    color: white;
+    border: none;
+    border-radius: 5px;
+    cursor: pointer;
+    font-weight: bold;
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.2);
+    transition: all 0.3s ease;
+}
+
+.move-button:hover {
+    background: linear-gradient(90deg, #ff4500, #ffaa00);
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
+    transform: translateY(-2px);
+}
+
+.capture-button {
+    padding: 10px 20px;
+    background: linear-gradient(90deg, #ff7b00, #ffdd00);
+    color: white;
+    border: none;
+    border-radius: 5px;
+    cursor: pointer;
+    font-weight: bold;
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.2);
+    transition: all 0.3s ease;
+}
+
+.capture-button:hover {
+    background: linear-gradient(90deg, #ff4500, #ffaa00);
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
+    transform: translateY(-2px);
 }
