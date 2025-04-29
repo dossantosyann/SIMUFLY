@@ -21,18 +21,6 @@ if __name__ == "__main__":
     camera = Webcam()
     
     # Le thread de capture est déjà démarré dans l'initialisation de Webcam
-
-    @app.route("/api/users", methods=["GET"])
-    def users():
-        return jsonify({
-            "users": [
-                "yannette",
-                "claudette",
-                "danette",
-                "ouga ouga"
-            ]
-        })
-
     @app.route("/video_feed")
     def video_feed():
         return Response(
@@ -43,23 +31,6 @@ if __name__ == "__main__":
     @app.route("/")
     def home():
         return send_from_directory(app.static_folder, "index.html")
-
-    @app.route("/take_picture", methods=["POST"])
-    def take_picture():
-        data = request.get_json()
-        flag = data.get("flag")
-
-        if not flag:
-            return jsonify({"error": "Flag manquant"}), 400
-
-        if flag == "mon super flag":
-            camera.takePic("photo_webcam.jpg")
-            print("📸 Photo enregistrée avec succès")
-        else:
-            print("❌ Flag incorrect")
-
-        print(f"Flag reçu : {flag}")
-        return jsonify({"message": "Flag reçu"}), 200
     
     @app.route("/execute", methods=["POST"])
     def execute():
