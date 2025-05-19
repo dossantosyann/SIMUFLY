@@ -40,7 +40,7 @@ YLIM_MM = 1000.0  # Y-axis limit in mm
 # Pulse timing
 PULSE_DELAY_FAST = 0.0005 # Delay for fast speed (in seconds per step cycle)
 PULSE_DELAY_SLOW = 0.005  # Delay for slow speed (in seconds per step cycle)
-current_pulse_delay = PULSE_DELAY_FAST # Active delay, modifiable by F command
+current_pulse_delay = PULSE_DELAY_SLOW # Active delay, modifiable by S command
 
 # --- System State ---
 current_x_mm = 0.0  # Current X position in mm
@@ -202,7 +202,7 @@ def parse_gcode_and_execute(line):
             print("    Logical position reset to 0,0. No physical movement in REL for this HOME.")
         print(f"  New position: X={current_x_mm:.3f} mm, Y={current_y_mm:.3f} mm")
 
-    elif instruction.startswith("F"): # Feedrate command
+    elif instruction.startswith("S"): # Feedrate command
         try:
             speed_val = float(instruction[1:]) # e.g., F3000
             # Simple interpretation: high value = fast, low value = slow
@@ -213,7 +213,7 @@ def parse_gcode_and_execute(line):
                 current_pulse_delay = PULSE_DELAY_SLOW
                 print(f"  Speed set to SLOW (delay: {current_pulse_delay*1000:.3f} ms/pulse)")
         except ValueError:
-            print(f"  Invalid F value: {instruction}")
+            print(f"  Invalid speed value: {instruction}")
             
     elif instruction == "MOVE" : # Linear/Rapid move
         target_x_cmd = None
