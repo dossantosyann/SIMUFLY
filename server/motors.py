@@ -1,5 +1,3 @@
-#!/usr/bin/env python3
-
 import gpiozero
 import time
 import math
@@ -33,9 +31,9 @@ XLIM_MM = 1000.0
 YLIM_MM = 1000.0
 
 # --- Speed and Timing Parameters ---
-DEFAULT_SPEED_MM_S = 20.0       # Default speed in mm/s
+DEFAULT_SPEED_MM_S = 50.0       # Default speed in mm/s
 TARGET_SPEED_MM_S = DEFAULT_SPEED_MM_S # Global target speed, set by S command
-HOMING_SPEED_MM_S = 10.0        # Speed for HOME moves in mm/s
+HOMING_SPEED_MM_S = 50.0        # Speed for HOME moves in mm/s
 
 MIN_PULSE_WIDTH = 0.000002      # 2 microseconds (minimum pulse high time)
 # Minimum total time for a pulse cycle (on-wait-off-wait).
@@ -322,13 +320,13 @@ def main_cli():
     print(f"Initial (assumed) position: X={current_x_mm:.2f}, Y={current_y_mm:.2f} mm")
     print(f"Initial Target Speed: {TARGET_SPEED_MM_S:.2f} mm/s")
     print("Available commands:")
-    print("  MOVE X<val> Y<val> [S<speed_mm_s>] - Move to coordinates (e.g., MOVE X100 Y50 S50)")
-    print("  ABS                              - Absolute positioning mode")
-    print("  REL                              - Relative positioning mode")
-    print("  HOME                             - Home (moves to 0,0 at homing speed if ABS)")
-    print("  S <speed_mm_s> or S<speed_mm_s>  - Set global target speed (e.g., S75 or S 75)")
-    print("  POS                              - Display current position and target speed")
-    print("  EXIT / QUIT                      - Exit program")
+    print("  MOVE X<val> Y<val> [S<speed mm/s>] - Move to coordinates (e.g., MOVE X100 Y50 S50)")
+    print("  ABS                                - Absolute positioning mode")
+    print("  REL                                - Relative positioning mode")
+    print("  HOME                               - Home (moves to 0,0 at homing speed if ABS)")
+    print("  S<speed mm/s>                      - Set global target speed (e.g., S75 or S 75)")
+    print("  POS                                - Display current position and target speed")
+    print("  EXIT / QUIT                        - Exit program")
     print("-----------------------------")
 
     running = True
