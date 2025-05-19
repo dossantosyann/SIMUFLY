@@ -45,7 +45,7 @@ current_pulse_delay = PULSE_DELAY_FAST # Active delay, modifiable by F command
 # --- System State ---
 current_x_mm = 0.0  # Current X position in mm
 current_y_mm = 0.0  # Current Y position in mm
-absolute_mode = True # True for abs (absolute), False for rel (relative)
+absolute_mode = True # True for ABS (absolute), False for REL (relative)
 
 # Minimum pulse width (in seconds)
 # Some drivers require a minimum pulse duration.
@@ -179,14 +179,14 @@ def parse_gcode_and_execute(line):
 
     print(f"CMD: {command}")
 
-    if instruction == "abs":
+    if instruction == "ABS":
         absolute_mode = True
-        print("  Mode: Absolute Positioning (abs)")
-    elif instruction == "rel":
+        print("  Mode: Absolute Positioning (ABS)")
+    elif instruction == "REL":
         absolute_mode = False
-        print("  Mode: Relative Positioning (rel)")
-    elif instruction == "home": # Simplified "Homing" command
-        print("  Homing (home):")
+        print("  Mode: Relative Positioning (REL)")
+    elif instruction == "HOME": # Simplified "Homing" command
+        print("  Homing (HOME):")
         if absolute_mode:
             print(f"    Moving to 0,0 from {current_x_mm:.2f}, {current_y_mm:.2f}")
             target_x_abs = 0.0
@@ -195,11 +195,11 @@ def parse_gcode_and_execute(line):
             dx = target_x_abs - current_x_mm
             dy = target_y_abs - current_y_mm
             move_corexy(dx, dy)
-        else: # In relative mode, home often means "go to limit switches and set zero"
+        else: # In relative mode, HOME often means "go to limit switches and set zero"
               # Here, we'll just reset logical coordinates without physical movement.
             current_x_mm = 0.0
             current_y_mm = 0.0
-            print("    Logical position reset to 0,0. No physical movement in rel for this home.")
+            print("    Logical position reset to 0,0. No physical movement in REL for this HOME.")
         print(f"  New position: X={current_x_mm:.3f} mm, Y={current_y_mm:.3f} mm")
 
     elif instruction.startswith("F"): # Feedrate command
@@ -215,7 +215,7 @@ def parse_gcode_and_execute(line):
         except ValueError:
             print(f"  Invalid F value: {instruction}")
             
-    elif instruction == "G0" or instruction == "G1": # Linear/Rapid move
+    elif instruction == "MOVE" : # Linear/Rapid move
         target_x_cmd = None
         target_y_cmd = None
         
@@ -226,17 +226,17 @@ def parse_gcode_and_execute(line):
             elif part.startswith('Y'):
                 try: target_y_cmd = float(part[1:])
                 except ValueError: print(f"  Invalid Y value: {part}"); return
-            elif part.startswith('F'): # Allow F in G0/G1 as well
+            elif part.startswith('F'): # Allow F in MOVE/G1 as well
                  try:
                     speed_val = float(part[1:])
                     if speed_val > 1500: current_pulse_delay = PULSE_DELAY_FAST
                     else: current_pulse_delay = PULSE_DELAY_SLOW
                     print(f"  Speed updated (delay: {current_pulse_delay*1000:.3f} ms/pulse)")
-                 except ValueError: print(f"  Invalid F value in G0/G1: {part}")
+                 except ValueError: print(f"  Invalid F value in MOVE: {part}")
 
 
         if target_x_cmd is None and target_y_cmd is None:
-            print("  No X or Y coordinate specified for G0/G1.")
+            print("  No X or Y coordinate specified for MOVE.")
             return
 
         final_target_x_mm = current_x_mm
@@ -291,14 +291,13 @@ def main_cli():
     print(f"Motor Native Steps/Rev: {MOTOR_NATIVE_STEPS_PER_REV}, Driver Microstepping: 1/{DRIVER_MICROSTEP_DIVISOR}")
     print(f"Initial (assumed) position: X={current_x_mm:.2f}, Y={current_y_mm:.2f} mm")
     print("Available commands:")
-    print("  G0 X<val> Y<val> [F<rate>] - Rapid/Linear move (e.g., G0 X100 Y50 F3000)")
-    print("  G1 X<val> Y<val> [F<rate>] - Same as G0 in this version")
-    print("  abs                      - Absolute positioning mode")
-    print("  rel                      - Relative positioning mode")
-    print("  home                      - Home (moves to 0,0 if in abs, else resets 0,0)")
-    print("  F<rate>                  - Set speed (e.g., F1000 for slow, F3000 for fast)")
-    print("  POS                      - Display current position")
-    print("  EXIT / QUIT              - Exit program")
+    print("  MOVE X<val> Y<val> [S<value>]  - Rapid/Linear move (e.g., MOVE X100 Y50 F3000)")
+    print("  ABS                            - Absolute positioning mode")
+    print("  REL                            - Relative positioning mode")
+    print("  HOME                           - Home (moves to 0,0 if in ABS, else resets 0,0)")
+    print("  S<value>                       - Set speed (e.g., F1000 for slow, F3000 for fast)")
+    print("  POS                            - Display current position")
+    print("  EXIT / QUIT                    - Exit program")
     print("-----------------------------")
 
     running = True
