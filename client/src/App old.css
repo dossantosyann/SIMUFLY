@@ -1,0 +1,165 @@
+/* @import "tailwindcss"; */
+
+#root {
+    max-width: 1280px;
+    margin: 0 auto;
+    padding: 2rem;
+    text-align: center;
+}
+
+.logo {
+    height: 6em;
+    padding: 1.5em;
+    will-change: filter;
+    transition: filter 300ms;
+}
+
+.logo:hover {
+    filter: drop-shadow(0 0 2em #ff6464aa);
+}
+
+.logo.react:hover {
+    filter: drop-shadow(0 0 2em #61dafbaa);
+}
+
+@keyframes logo-spin {
+    from {
+        transform: rotate(0deg);
+    }
+
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+    a:nth-of-type(2) .logo {
+        animation: logo-spin infinite 20s linear;
+    }
+}
+
+.card {
+    padding: 2em;
+}
+
+.read-the-docs {
+    color: #888;
+}
+
+.sliders-container {
+    display: flex;
+    /* Affichage en ligne */
+    justify-content: center;
+    /* Centre horizontalement */
+    align-items: center;
+    /* Aligne verticalement */
+    gap: 250px;
+    /* Espace entre les sliders */
+    margin-top: 20px;
+}
+
+.slider-wrapper {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    width: 100px;
+    /* Augmenté pour mieux voir le slider */
+}
+
+input[type="range"] {
+    -webkit-appearance: none;
+    /* Supprime le style par défaut */
+    width: 300px;
+    height: 8px;
+    background: linear-gradient(90deg, #ff7b00, #ffdd00);
+    /* Dégradé */
+    border-radius: 5px;
+    outline: none;
+    cursor: pointer;
+}
+
+/* Le curseur (thumb) */
+input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 20px;
+    height: 20px;
+    background: #ff7b00;
+    border-radius: 50%;
+    border: 2px solid white;
+    box-shadow: 0px 2px 5px rgba(0, 0, 0, 0.2);
+    transition: 0.2s ease-in-out;
+}
+
+input[type="range"]::-webkit-slider-thumb:hover {
+    transform: scale(1.2);
+    background: #ff4500;
+}
+
+p {
+    font-size: 18px;
+    font-weight: bold;
+    color: #7e7e7e;
+}
+
+.video-container img {
+    width: 720px;
+    height: auto;
+    border: 3px solid #ff7b00;
+    border-radius: 5px;
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+    padding: 3px;
+    background-color: white;
+}
+
+.button-row {
+    display: flex;
+    justify-content: center;
+    gap: 20px;
+    margin: 20px 0;
+}
+
+.button-row button {
+    padding: 10px 20px;
+    font-size: 1rem;
+    cursor: pointer;
+}
+
+.button-row button,
+.control-panel button {
+    padding: 12px 24px;
+    font-size: 1.1rem;
+    font-weight: bold;
+    background: linear- ;
+    color: white;
+    border: rgba(0,0,0,0);
+    border-radius: 10px;
+    cursor: pointer;
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.2);
+    transition: all 0.3s ease;
+}
+
+.button-row button:hover,
+.control-panel button:hover {
+    transform: translateY(-5px);
+    background: linear-gradient(90deg, #ff4500, #ffaa00);
+    box-shadow: 0 8px 12px rgba(0, 0, 0, 0.3);
+}
+
+.mode-title {
+    margin-bottom: 20px;
+}
+
+.mode-title h2 {
+    font-size: 1.8rem;
+    color: #ff7b00;
+    font-weight: bold;
+}
+
+button:focus {
+    outline: none;
+}
+
+.selected-button {
+    border: 3px solid black;
+}
+

@@ -1,0 +1,8 @@
+.DS_Store
+sandbox.py
+*.png
+*.PNG
+*.jpg
+*.JPG
+*.jpeg
+*.JPEG
