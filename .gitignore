@@ -6,3 +6,4 @@ sandbox.py
 *.JPG
 *.jpeg
 *.JPEG
+__pycache__
