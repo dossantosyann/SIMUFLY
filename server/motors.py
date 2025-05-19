@@ -45,7 +45,7 @@ current_pulse_delay = PULSE_DELAY_FAST # Active delay, modifiable by F command
 # --- System State ---
 current_x_mm = 0.0  # Current X position in mm
 current_y_mm = 0.0  # Current Y position in mm
-absolute_mode = True # True for G90 (absolute), False for G91 (relative)
+absolute_mode = True # True for abs (absolute), False for rel (relative)
 
 # Minimum pulse width (in seconds)
 # Some drivers require a minimum pulse duration.
@@ -179,14 +179,14 @@ def parse_gcode_and_execute(line):
 
     print(f"CMD: {command}")
 
-    if instruction == "G90":
+    if instruction == "abs":
         absolute_mode = True
-        print("  Mode: Absolute Positioning (G90)")
-    elif instruction == "G91":
+        print("  Mode: Absolute Positioning (abs)")
+    elif instruction == "rel":
         absolute_mode = False
-        print("  Mode: Relative Positioning (G91)")
-    elif instruction == "G28": # Simplified "Homing" command
-        print("  Homing (G28):")
+        print("  Mode: Relative Positioning (rel)")
+    elif instruction == "home": # Simplified "Homing" command
+        print("  Homing (home):")
         if absolute_mode:
             print(f"    Moving to 0,0 from {current_x_mm:.2f}, {current_y_mm:.2f}")
             target_x_abs = 0.0
@@ -195,11 +195,11 @@ def parse_gcode_and_execute(line):
             dx = target_x_abs - current_x_mm
             dy = target_y_abs - current_y_mm
             move_corexy(dx, dy)
-        else: # In relative mode, G28 often means "go to limit switches and set zero"
+        else: # In relative mode, home often means "go to limit switches and set zero"
               # Here, we'll just reset logical coordinates without physical movement.
             current_x_mm = 0.0
             current_y_mm = 0.0
-            print("    Logical position reset to 0,0. No physical movement in G91 for this G28.")
+            print("    Logical position reset to 0,0. No physical movement in rel for this home.")
         print(f"  New position: X={current_x_mm:.3f} mm, Y={current_y_mm:.3f} mm")
 
     elif instruction.startswith("F"): # Feedrate command
@@ -293,9 +293,9 @@ def main_cli():
     print("Available commands:")
     print("  G0 X<val> Y<val> [F<rate>] - Rapid/Linear move (e.g., G0 X100 Y50 F3000)")
     print("  G1 X<val> Y<val> [F<rate>] - Same as G0 in this version")
-    print("  G90                      - Absolute positioning mode")
-    print("  G91                      - Relative positioning mode")
-    print("  G28                      - Home (moves to 0,0 if in G90, else resets 0,0)")
+    print("  abs                      - Absolute positioning mode")
+    print("  rel                      - Relative positioning mode")
+    print("  home                      - Home (moves to 0,0 if in abs, else resets 0,0)")
     print("  F<rate>                  - Set speed (e.g., F1000 for slow, F3000 for fast)")
     print("  POS                      - Display current position")
     print("  EXIT / QUIT              - Exit program")
