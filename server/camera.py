@@ -371,27 +371,35 @@ def parse_command_and_execute(line):
 
 
 def display_cli_help():
-    print("\n--- Aide de Webcam CLI (Style motors.py) ---")
-    print("Commandes disponibles (insensibles à la casse):")
-    print("  LIST_CAMERAS                          - Liste les webcams disponibles et leurs résolutions.")
-    print("  CAPTURE [OUTPUT <path>] [COUNT <n>] [DEVICE <i>]")
-    print("                                        - Capture une ou plusieurs images.")
-    print("    OUTPUT <chemin/nom_base.ext>        : Chemin du fichier. Défaut: 'captured_image.jpg'")
-    print("                                          (Si COUNT > 1, _N sera ajouté avant l'extension)")
-    print("    COUNT <nombre>                      : Nombre d'images à capturer. Défaut: 1.")
-    print("    DEVICE <index>                      : Index de la caméra à utiliser. Défaut: 0.")
-    print("  STREAM [DEVICE <i>] [PORT <p>] [HOST <h>]")
-    print("                                        - Démarre un flux vidéo web via Flask.")
-    print("    DEVICE <index>                      : Index de la caméra. Défaut: 0.")
-    print("    PORT <numero>                       : Port pour le serveur web. Défaut: 5050.")
-    print("    HOST <adresse_ip>                   : Hôte pour le serveur web. Défaut: 'localhost'.")
-    print("  HELP                                  - Affiche cette aide.")
-    print("  EXIT / QUIT                           - Quitte l'application.")
-    print("---------------------------------------------")
-    print("Exemples:")
-    print("  CAPTURE OUTPUT captures/image.png COUNT 3 DEVICE 1")
-    print("  STREAM PORT 8080 DEVICE 0")
-    print("---------------------------------------------")
+    print("\n" + "=" * 48)
+    print("                Camera CLI Interface")
+    print("=" * 48)
+    print("Available commands (case-insensitive):\n")
+
+    print("LIST_CAMERAS")
+    print("  List available webcams and their resolutions.\n")
+
+    print("CAPTURE [OUTPUT <path>] [COUNT <n>] [DEVICE <i>]")
+    print("  Capture one or more images.")
+    print("  OUTPUT: file path (default: 'captured_image.jpg')")
+    print("          '_N' added before extension if COUNT > 1")
+    print("  COUNT:  number of images (default: 1)")
+    print("  DEVICE: camera index (default: 0)\n")
+
+    print("STREAM [DEVICE <i>] [PORT <p>] [HOST <h>]")
+    print("  Start a web video stream using Flask.")
+    print("  DEVICE: camera index (default: 0)")
+    print("  PORT:   web server port (default: 5050)")
+    print("  HOST:   host IP (default: 'localhost')\n")
+
+    print("HELP")
+    print("  Show this help message.\n")
+
+    print("EXIT / QUIT")
+    print("  Exit the application.")
+    print("=" * 48 + "\n")
+
+
 
 def main_cli():
     """Boucle principale pour l'interface en ligne de commande."""
