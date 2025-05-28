@@ -63,7 +63,7 @@ def list_available_cameras():
 
         # Utiliser SuppressStdStreams pour masquer les messages C++ lors de l'appel à VideoCapture
         with SuppressStdStreams():
-            cap = cv2.VideoCapture(index) # Cet appel peut générer des messages d'erreur C++
+            cap = cv2.VideoCapture(index, cv2.CAP_V4L2) # Cet appel peut générer des messages d'erreur C++
 
         # Les vérifications et les prints suivants sont HORS du bloc 'with',
         # ils s'afficheront donc normalement.
@@ -104,7 +104,7 @@ def list_available_cameras():
 
 def capture_images_high_res(device_index=0, base_output_path="capture.jpg", num_images=1):
     print(f"Tentative de capture de {num_images} image(s) depuis le périphérique {device_index}...")
-    cap = cv2.VideoCapture(device_index)
+    cap = cv2.VideoCapture(device_index, cv2.CAP_V4L2)
     if not cap.isOpened():
         print(f"Erreur : Impossible d'ouvrir la webcam (périphérique {device_index}).")
         return
@@ -167,7 +167,7 @@ if flask_available:
         global camera_stream_obj, selected_device_for_stream_interactive
         if camera_stream_obj is None or not camera_stream_obj.isOpened():
             print(f"Initialisation du flux vidéo pour le périphérique {selected_device_for_stream_interactive}...")
-            camera_stream_obj = cv2.VideoCapture(selected_device_for_stream_interactive)
+            camera_stream_obj = cv2.VideoCapture(selected_device_for_stream_interactive, cv2.CAP_V4L2)
             if not camera_stream_obj.isOpened():
                 print(f"Erreur fatale: Impossible d'ouvrir la caméra {selected_device_for_stream_interactive} pour le streaming.")
                 return # Stop generation
@@ -224,7 +224,7 @@ def start_video_stream_interactive(device_index=0, port=5050, host='localhost'):
     selected_device_for_stream_interactive = device_index
 
     # Test camera before starting Flask server
-    cam_test = cv2.VideoCapture(selected_device_for_stream_interactive)
+    cam_test = cv2.VideoCapture(selected_device_for_stream_interactive, cv2.CAP_V4L2)
     if not cam_test.isOpened():
         print(f"Erreur : Impossible d'ouvrir la webcam {selected_device_for_stream_interactive} pour le streaming.")
         cam_test.release()
@@ -419,8 +419,8 @@ def main_cli():
                 continue
             running = parse_command_and_execute(command_line_input)
         except KeyboardInterrupt:
-            print("\nInterruption clavier. Tapez 'EXIT' ou 'QUIT' pour quitter.")
-            # Optionally, could make it exit directly: running = False
+            print("\nInterruption clavier.")
+            running = False
         except Exception as e:
             print(f"Une erreur inattendue est survenue dans la boucle principale: {e}")
             import traceback
