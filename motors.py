@@ -35,9 +35,9 @@ XLIM_MM = DEFAULT_XLIM_MM
 YLIM_MM = DEFAULT_YLIM_MM
 
 # --- Speed and Timing Parameters ---
-DEFAULT_SPEED_MM_S = 50.0       # Default speed in mm/s
+DEFAULT_SPEED_MM_S = 200.0       # Default speed in mm/s
 TARGET_SPEED_MM_S = DEFAULT_SPEED_MM_S # Global target speed, set by S command
-HOMING_SPEED_MM_S = 50.0        # Speed for HOME moves in mm/s
+HOMING_SPEED_MM_S = 200.0        # Speed for HOME moves in mm/s
 
 MIN_PULSE_WIDTH = 0.000002      # 2 microseconds (minimum pulse high time)
 # Minimum total time for a pulse cycle (on-wait-off-wait).
@@ -90,8 +90,8 @@ def move_motors_coordinated(steps_m1_target, steps_m2_target, pulse_cycle_delay_
     if steps_m1_target > 0: dir_device_m1.on()
     else: dir_device_m1.off()
 
-    if steps_m2_target > 0: dir_device_m2.on()
-    else: dir_device_m2.off()
+    if steps_m2_target > 0: dir_device_m2.off()
+    else: dir_device_m2.on()
     
     time.sleep(0.001) # Allow direction pins to settle
 
