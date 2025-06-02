@@ -295,11 +295,10 @@ def parse_command_and_execute(line):
                     pulse_delay_for_this_move = time_for_move_s / num_iterations
                     actual_pulse_delay_for_this_move = max(MINIMUM_PULSE_CYCLE_DELAY, pulse_delay_for_this_move)
                     
-                    # Calculate effective speed based on the actual pulse delay
-                    if (num_iterations * actual_pulse_delay_for_this_move) > 0: # Avoid division by zero
+                    if (num_iterations * actual_pulse_delay_for_this_move) > 0: 
                         effective_speed_mm_s = path_length_mm / (num_iterations * actual_pulse_delay_for_this_move)
                     else:
-                        effective_speed_mm_s = 0 # Or handle as an error/special case
+                        effective_speed_mm_s = 0 
 
                     output_messages.append(f"  Moving by dx={delta_x_to_move:.3f} mm, dy={delta_y_to_move:.3f} mm")
                     output_messages.append(f"  To X={actual_target_x_mm:.3f}, Y={actual_target_y_mm:.3f}")
@@ -335,7 +334,7 @@ def draw_ui(stdscr, header_lines, status_lines, command_output_lines, input_prom
     # Header
     for i, line in enumerate(header_lines):
         if current_y < max_y:
-            stdscr.addstr(current_y, 0, line[:max_x-1]) # Truncate if too long
+            stdscr.addstr(current_y, 0, line[:max_x-1]) 
             current_y += 1
     if current_y < max_y:
         stdscr.addstr(current_y, 0, "-" * (max_x -1) )
@@ -350,26 +349,24 @@ def draw_ui(stdscr, header_lines, status_lines, command_output_lines, input_prom
         stdscr.addstr(current_y, 0, "-" * (max_x-1) )
         current_y +=1
     
-    # Command Output - display last N lines that fit
     output_start_y = current_y
-    available_lines_for_output = max_y - output_start_y - 2 # 1 for input prompt, 1 for border
+    available_lines_for_output = max_y - output_start_y - 2 
     
     start_index = 0
     if len(command_output_lines) > available_lines_for_output:
         start_index = len(command_output_lines) - available_lines_for_output
     
     for i, line in enumerate(command_output_lines[start_index:]):
-        if output_start_y + i < max_y - 2: # Ensure space for input line
-            stdscr.addstr(output_start_y + i, 0, line[:max_x-1]) # Truncate lines
+        if output_start_y + i < max_y - 2: 
+            stdscr.addstr(output_start_y + i, 0, line[:max_x-1]) 
     current_y = max_y - 2
-    if current_y > 0 : # Ensure current_y is not negative
+    if current_y > 0 : 
          stdscr.addstr(current_y, 0, "-" * (max_x-1) )
     
-    # Input prompt and line
     input_line_y = max_y - 1
-    if input_line_y > 0: # Ensure input_line_y is not negative
+    if input_line_y > 0: 
         stdscr.addstr(input_line_y, 0, input_prompt)
-        stdscr.move(input_line_y, len(input_prompt)) # Move cursor to after prompt
+        stdscr.move(input_line_y, len(input_prompt)) 
 
     stdscr.refresh()
 
@@ -377,8 +374,10 @@ def _curses_main_loop(stdscr):
     """Main loop for the command-line interface, managed by curses."""
     global TARGET_SPEED_MM_S, current_x_mm, current_y_mm, absolute_mode, last_command_output
 
-    curses.curs_set(1) # Make cursor visible
-    stdscr.nodelay(False) # Blocking input
+    curses.curs_set(1) 
+    # curses.wrapper calls noecho() by default, which is what we want mostly.
+    # We will enable echo only for getstr().
+    stdscr.nodelay(False)
 
     header = [
         "--- CoreXY CLI Controller (Custom Commands) ---",
@@ -386,7 +385,13 @@ def _curses_main_loop(stdscr):
         f"Resolution: {MM_PER_MICROSTEP} mm/microstep ({MICROSTEPS_PER_MM} microsteps/mm)",
         f"Motor Native Steps/Rev: {MOTOR_NATIVE_STEPS_PER_REV}, Driver Microstepping: 1/{DRIVER_MICROSTEP_DIVISOR}",
         f"Min Pulse Cycle Delay: {MINIMUM_PULSE_CYCLE_DELAY*1000:.3f} ms",
-        "Available commands: MOVE X<v> Y<v> [S<v>], ABS, REL, HOME, S<v>, POS, EXIT/QUIT"
+        "Available commands:",
+        "  MOVE X<v> Y<v> [S<v>]",
+        "  ABS, REL",
+        "  HOME",
+        "  S<v>",
+        "  POS",
+        "  EXIT/QUIT"
     ]
 
     running = True
@@ -402,63 +407,60 @@ def _curses_main_loop(stdscr):
         input_line_y = stdscr.getmaxyx()[0] - 1
         
         try:
-            # Get input string from the user
-            # Ensure cursor is at the correct position for input
-            if input_line_y > 0: # check if y coordinate is valid
+            if input_line_y > 0: 
                  stdscr.move(input_line_y, len(input_prompt_text))
-                 cmd_line_bytes = stdscr.getstr(input_line_y, len(input_prompt_text), 60) # Read up to 60 chars
+                 curses.echo() # <--- ACTIVATE ECHO FOR GETSTR
+                 cmd_line_bytes = stdscr.getstr(input_line_y, len(input_prompt_text), 60) 
+                 curses.noecho() # <--- DEACTIVATE ECHO AFTER GETSTR
                  cmd_line = cmd_line_bytes.decode('utf-8').strip()
-            else: # Terminal too small for input line
-                cmd_line = "" # Default to empty command
+            else: 
+                cmd_line = "" 
 
             if not cmd_line:
-                last_command_output = [] # Clear output if no command entered
+                last_command_output = [] 
                 continue
 
             last_command_output, running = parse_command_and_execute(cmd_line)
 
         except curses.error as e:
-            # This might happen if the terminal is resized too small
+            curses.noecho() # Ensure echo is off
             last_command_output = [f"Curses error: {e}", "Try resizing terminal or type 'exit'."]
         except KeyboardInterrupt:
+            curses.noecho() # Ensure echo is off
             last_command_output = ["Keyboard interrupt detected. Exiting..."]
             running = False
         except Exception as e:
-            # Catch any other unexpected errors from command parsing or execution
+            curses.noecho() # Ensure echo is off
             last_command_output = [
                 f"An unexpected error occurred: {e}",
                 "Check command syntax or internal logic."
             ]
-            # Optionally, for debugging:
-            # import traceback
+            # import traceback # Uncomment for debug
             # last_command_output.append("Traceback:")
             # last_command_output.extend(traceback.format_exc().splitlines())
             
-    # One final display of exit messages before curses terminates
-    status = [ # Update status one last time if needed
+    status = [ 
         f"Current Position: X={current_x_mm:.3f} mm, Y={current_y_mm:.3f} mm",
         f"Target Speed: {TARGET_SPEED_MM_S:.2f} mm/s, Mode: {'ABS' if absolute_mode else 'REL'}"
     ]
-    if "Exiting program." not in last_command_output[-1]: # Append if not already there from EXIT cmd
+    if not last_command_output or "Exiting program." not in last_command_output[-1]:
         last_command_output.append("Exiting program.")
     draw_ui(stdscr, header, status, last_command_output, input_prompt_text)
     stdscr.refresh()
-    time.sleep(1) # Show final message briefly
+    time.sleep(1) 
 
 if __name__ == "__main__":
     if setup_gpio():
         try:
             curses.wrapper(_curses_main_loop)
         except Exception as e:
-            # This will catch errors if curses itself fails to initialize
-            # or unhandled exceptions from _curses_main_loop
             print(f"A critical error occurred: {e}")
             import traceback
             traceback.print_exc()
         finally:
             print("Cleaning up before exit...")
-            cleanup_gpio() # GPIO cleanup is always called
-            print("Program terminated.") # This will print after curses has ended
+            cleanup_gpio() 
+            print("Program terminated.") 
     else:
         print("GPIO setup failed. Program will not start controller interface.")
         print("Program terminated.")
