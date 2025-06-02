@@ -90,8 +90,8 @@ def move_motors_coordinated(steps_m1_target, steps_m2_target, pulse_cycle_delay_
     if steps_m1_target > 0: dir_device_m1.off()
     else: dir_device_m1.on()
 
-    if steps_m2_target > 0: dir_device_m2.on()
-    else: dir_device_m2.off()
+    if steps_m2_target > 0: dir_device_m2.off()
+    else: dir_device_m2.on()
     
     time.sleep(0.001) # Allow direction pins to settle
 
@@ -128,8 +128,8 @@ def move_corexy(delta_x_mm, delta_y_mm, pulse_cycle_delay_for_move):
     delta_x_steps_cartesian = round(delta_x_mm * MICROSTEPS_PER_MM)
     delta_y_steps_cartesian = round(delta_y_mm * MICROSTEPS_PER_MM)
 
-    steps_m1 = delta_x_steps_cartesian + delta_y_steps_cartesian
-    steps_m2 = delta_x_steps_cartesian - delta_y_steps_cartesian
+    steps_m1 = delta_x_steps_cartesian - delta_y_steps_cartesian
+    steps_m2 = delta_x_steps_cartesian + delta_y_steps_cartesian
     
     if steps_m1 == 0 and steps_m2 == 0:
         pass
