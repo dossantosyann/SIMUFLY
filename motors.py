@@ -125,8 +125,8 @@ def move_corexy(delta_x_mm, delta_y_mm, pulse_cycle_delay_for_move):
     global current_x_mm, current_y_mm
     motor_messages = []
 
-    delta_x_steps_cartesian = round(delta_x_mm * MICROSTEPS_PER_MM)
-    delta_y_steps_cartesian = round(-delta_y_mm * MICROSTEPS_PER_MM)
+    delta_x_steps_cartesian = round(-delta_x_mm * MICROSTEPS_PER_MM)
+    delta_y_steps_cartesian = round(delta_y_mm * MICROSTEPS_PER_MM)
 
     steps_m1 = delta_x_steps_cartesian + delta_y_steps_cartesian
     steps_m2 = delta_x_steps_cartesian - delta_y_steps_cartesian
