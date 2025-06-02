@@ -87,11 +87,11 @@ def move_motors_coordinated(steps_m1_target, steps_m2_target, pulse_cycle_delay_
         messages.append("Error: GPIO devices not initialized.")
         return messages
 
-    if steps_m1_target > 0: dir_device_m1.on()
-    else: dir_device_m1.off()
+    if steps_m1_target > 0: dir_device_m1.off()
+    else: dir_device_m1.on()
 
-    if steps_m2_target > 0: dir_device_m2.off()
-    else: dir_device_m2.on()
+    if steps_m2_target > 0: dir_device_m2.on()
+    else: dir_device_m2.off()
     
     time.sleep(0.001) # Allow direction pins to settle
 
