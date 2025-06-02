@@ -23,13 +23,16 @@ dir_device_m2 = None
 MOTOR_NATIVE_STEPS_PER_REV = 400
 DRIVER_MICROSTEP_DIVISOR = 2
 
-MM_PER_MICROSTEP = 0.5
+MM_PER_MICROSTEP = 0.1
 if MM_PER_MICROSTEP == 0:
     raise ValueError("MM_PER_MICROSTEP cannot be zero.")
 MICROSTEPS_PER_MM = 1.0 / MM_PER_MICROSTEP
 
-XLIM_MM = 1000.0
-YLIM_MM = 1000.0
+# <<< MODIFIED >>> Store default limits and current effective limits
+DEFAULT_XLIM_MM = 1000.0
+DEFAULT_YLIM_MM = 1000.0
+XLIM_MM = DEFAULT_XLIM_MM
+YLIM_MM = DEFAULT_YLIM_MM
 
 # --- Speed and Timing Parameters ---
 DEFAULT_SPEED_MM_S = 50.0       # Default speed in mm/s
@@ -145,7 +148,8 @@ def parse_command_and_execute(line):
     Parses a custom command line and executes it.
     Returns a tuple: (list_of_output_messages, continue_running_boolean).
     """
-    global current_x_mm, current_y_mm, absolute_mode, TARGET_SPEED_MM_S
+    # <<< MODIFIED >>> Added XLIM_MM, YLIM_MM to globals as they can be changed by LIMITS cmd
+    global current_x_mm, current_y_mm, absolute_mode, TARGET_SPEED_MM_S, XLIM_MM, YLIM_MM 
     
     output_messages = []
     command = line.strip().upper()
@@ -200,7 +204,7 @@ def parse_command_and_execute(line):
                 output_messages.append("    Logical position reset to 0,0. No physical movement in REL for this HOME.")
         output_messages.append(f"  New position: X={current_x_mm:.3f} mm, Y={current_y_mm:.3f} mm")
             
-    elif instruction.startswith("S") and instruction != "MOVE":
+    elif instruction.startswith("S") and instruction != "MOVE": # Avoid conflict with S in MOVE
         try:
             if len(instruction) > 1 and instruction[1:].replace('.', '', 1).isdigit():
                  speed_val_mm_s = float(instruction[1:])
@@ -217,6 +221,27 @@ def parse_command_and_execute(line):
                 output_messages.append("  Speed S must be positive.")
         except ValueError:
             output_messages.append(f"  Invalid speed value in S command: {parts[1] if len(parts) > 1 else instruction[1:]}")
+    
+    # <<< ADDED >>> New LIMITS command
+    elif instruction == "LIMITS":
+        if len(parts) > 1:
+            sub_command = parts[1].upper()
+            if sub_command == "OFF":
+                XLIM_MM = float('inf')
+                YLIM_MM = float('inf')
+                output_messages.append("  Coordinate limits DISABLED.")
+                output_messages.append("  Warning: Moves can exceed default physical boundaries.")
+            elif sub_command == "ON":
+                XLIM_MM = DEFAULT_XLIM_MM
+                YLIM_MM = DEFAULT_YLIM_MM
+                output_messages.append(f"  Coordinate limits ENABLED (X: [0, {XLIM_MM:.0f}], Y: [0, {YLIM_MM:.0f}]).")
+            else:
+                output_messages.append("  Usage: LIMITS [ON|OFF]")
+        else:
+            x_lim_display = f"{XLIM_MM:.0f}" if XLIM_MM != float('inf') else "INF (Disabled)"
+            y_lim_display = f"{YLIM_MM:.0f}" if YLIM_MM != float('inf') else "INF (Disabled)"
+            output_messages.append(f"  Current effective limits: X=[0, {x_lim_display}], Y=[0, {y_lim_display}]")
+            output_messages.append("  Use 'LIMITS ON' or 'LIMITS OFF' to change.")
             
     elif instruction == "MOVE" :
         target_x_cmd = None
@@ -243,7 +268,7 @@ def parse_command_and_execute(line):
         if s_value_this_cmd is not None:
             if s_value_this_cmd > 0:
                 current_move_speed_mm_s = s_value_this_cmd
-                TARGET_SPEED_MM_S = current_move_speed_mm_s
+                # TARGET_SPEED_MM_S = current_move_speed_mm_s # Optional: update global S on MOVE S
             else:
                 output_messages.append(f"  Speed S in MOVE must be positive. Using global {TARGET_SPEED_MM_S:.2f} mm/s.")
         
@@ -256,12 +281,18 @@ def parse_command_and_execute(line):
             if target_x_cmd is not None: final_target_x_mm = current_x_mm + target_x_cmd
             if target_y_cmd is not None: final_target_y_mm = current_y_mm + target_y_cmd
         
+        # Clamping uses current XLIM_MM and YLIM_MM which might be float('inf')
         actual_target_x_mm = max(0.0, min(final_target_x_mm, XLIM_MM))
         actual_target_y_mm = max(0.0, min(final_target_y_mm, YLIM_MM))
 
-        if actual_target_x_mm != final_target_x_mm or actual_target_y_mm != final_target_y_mm:
-            output_messages.append(f"  Warning: Target ({final_target_x_mm:.2f}, {final_target_y_mm:.2f}) is out of bounds.")
+        if XLIM_MM != float('inf') and (actual_target_x_mm != final_target_x_mm or actual_target_y_mm != final_target_y_mm):
+            output_messages.append(f"  Warning: Target ({final_target_x_mm:.2f}, {final_target_y_mm:.2f}) is out of enabled bounds.")
             output_messages.append(f"           Will be clamped to ({actual_target_x_mm:.2f}, {actual_target_y_mm:.2f}).")
+        elif XLIM_MM == float('inf') and (actual_target_x_mm != final_target_x_mm or actual_target_y_mm != final_target_y_mm):
+            # This case implies target was < 0, as XLIM_MM/YLIM_MM are 'inf'
+             output_messages.append(f"  Warning: Target ({final_target_x_mm:.2f}, {final_target_y_mm:.2f}) is out of [0, inf) bounds.")
+             output_messages.append(f"           Will be clamped to ({actual_target_x_mm:.2f}, {actual_target_y_mm:.2f}).")
+
 
         delta_x_to_move = actual_target_x_mm - current_x_mm
         delta_y_to_move = actual_target_y_mm - current_y_mm
@@ -272,7 +303,7 @@ def parse_command_and_execute(line):
             output_messages.append(f"  Move too small or already at target. Current: ({current_x_mm:.3f}, {current_y_mm:.3f}), Target: ({actual_target_x_mm:.3f}, {actual_target_y_mm:.3f})")
             current_x_mm = actual_target_x_mm
             current_y_mm = actual_target_y_mm
-            current_x_mm = round(current_x_mm,3) # Python's round() returns the number, assignment is needed
+            current_x_mm = round(current_x_mm,3) 
             current_y_mm = round(current_y_mm,3)
         else:
             delta_x_steps_cartesian = round(delta_x_to_move * MICROSTEPS_PER_MM)
@@ -288,7 +319,7 @@ def parse_command_and_execute(line):
                 current_x_mm = round(current_x_mm,3)
                 current_y_mm = round(current_y_mm,3)
             else:
-                if current_move_speed_mm_s <= 1e-6: # Check for effectively zero speed
+                if current_move_speed_mm_s <= 1e-6: 
                     output_messages.append(f"  Target speed {current_move_speed_mm_s:.2e} mm/s is too low. No move executed.")
                 else:
                     time_for_move_s = path_length_mm / current_move_speed_mm_s
@@ -311,9 +342,13 @@ def parse_command_and_execute(line):
         output_messages.append(f"  New position: X={current_x_mm:.3f} mm, Y={current_y_mm:.3f} mm")
 
     elif instruction == "POS":
+        x_lim_display = f"{XLIM_MM:.0f}" if XLIM_MM != float('inf') else "INF (Disabled)" # <<< MODIFIED >>>
+        y_lim_display = f"{YLIM_MM:.0f}" if YLIM_MM != float('inf') else "INF (Disabled)" # <<< MODIFIED >>>
         output_messages.append(f"  Current Position: X={current_x_mm:.3f} mm, Y={current_y_mm:.3f} mm")
         output_messages.append(f"  Target Speed: {TARGET_SPEED_MM_S:.2f} mm/s")
         output_messages.append(f"  Mode: {'Absolute' if absolute_mode else 'Relative'}")
+        output_messages.append(f"  Effective Limits: X=[0, {x_lim_display}], Y=[0, {y_lim_display}]") # <<< ADDED >>>
+
 
     elif instruction in ["EXIT", "QUIT"]:
         output_messages.append("  Exiting program.")
@@ -372,30 +407,33 @@ def draw_ui(stdscr, header_lines, status_lines, command_output_lines, input_prom
 
 def _curses_main_loop(stdscr):
     """Main loop for the command-line interface, managed by curses."""
-    global TARGET_SPEED_MM_S, current_x_mm, current_y_mm, absolute_mode, last_command_output
+    # <<< MODIFIED >>> Add XLIM_MM, YLIM_MM to globals for header display
+    global TARGET_SPEED_MM_S, current_x_mm, current_y_mm, absolute_mode, last_command_output, XLIM_MM, YLIM_MM
 
     curses.curs_set(1) 
-    # curses.wrapper calls noecho() by default, which is what we want mostly.
-    # We will enable echo only for getstr().
     stdscr.nodelay(False)
-
-    header = [
-        "--- CoreXY CLI Controller (Custom Commands) ---",
-        f"Limits: X=[0, {XLIM_MM:.0f}], Y=[0, {YLIM_MM:.0f}] mm",
-        f"Resolution: {MM_PER_MICROSTEP} mm/microstep ({MICROSTEPS_PER_MM} microsteps/mm)",
-        f"Motor Native Steps/Rev: {MOTOR_NATIVE_STEPS_PER_REV}, Driver Microstepping: 1/{DRIVER_MICROSTEP_DIVISOR}",
-        f"Min Pulse Cycle Delay: {MINIMUM_PULSE_CYCLE_DELAY*1000:.3f} ms",
-        "Available commands:",
-        "  MOVE X<v> Y<v> [S<v>]",
-        "  ABS, REL",
-        "  HOME",
-        "  S<v>",
-        "  POS",
-        "  EXIT/QUIT"
-    ]
 
     running = True
     while running:
+        # <<< MODIFIED >>> Header display for limits
+        x_limit_display_str = f"{XLIM_MM:.0f}" if XLIM_MM != float('inf') else "INF (Disabled)"
+        y_limit_display_str = f"{YLIM_MM:.0f}" if YLIM_MM != float('inf') else "INF (Disabled)"
+
+        header = [
+            "--- CoreXY CLI Controller (Custom Commands) ---",
+            f"Effective Limits: X=[0, {x_limit_display_str}], Y=[0, {y_limit_display_str}] mm", # <<< MODIFIED >>>
+            f"Resolution: {MM_PER_MICROSTEP} mm/microstep ({MICROSTEPS_PER_MM} microsteps/mm)",
+            f"Motor Native Steps/Rev: {MOTOR_NATIVE_STEPS_PER_REV}, Driver Microstepping: 1/{DRIVER_MICROSTEP_DIVISOR}",
+            f"Min Pulse Cycle Delay: {MINIMUM_PULSE_CYCLE_DELAY*1000:.3f} ms",
+            "Available commands:",
+            "  MOVE X<v> Y<v> [S<v>]",
+            "  ABS, REL",
+            "  HOME",
+            "  S<v> or S <v>", # Clarified S command
+            "  LIMITS [ON|OFF]", # <<< ADDED >>>
+            "  POS",
+            "  EXIT/QUIT"
+        ]
         status = [
             f"Current Position: X={current_x_mm:.3f} mm, Y={current_y_mm:.3f} mm",
             f"Target Speed: {TARGET_SPEED_MM_S:.2f} mm/s, Mode: {'ABS' if absolute_mode else 'REL'}"
@@ -409,9 +447,9 @@ def _curses_main_loop(stdscr):
         try:
             if input_line_y > 0: 
                  stdscr.move(input_line_y, len(input_prompt_text))
-                 curses.echo() # <--- ACTIVATE ECHO FOR GETSTR
+                 curses.echo() 
                  cmd_line_bytes = stdscr.getstr(input_line_y, len(input_prompt_text), 60) 
-                 curses.noecho() # <--- DEACTIVATE ECHO AFTER GETSTR
+                 curses.noecho() 
                  cmd_line = cmd_line_bytes.decode('utf-8').strip()
             else: 
                 cmd_line = "" 
@@ -423,14 +461,14 @@ def _curses_main_loop(stdscr):
             last_command_output, running = parse_command_and_execute(cmd_line)
 
         except curses.error as e:
-            curses.noecho() # Ensure echo is off
+            curses.noecho() 
             last_command_output = [f"Curses error: {e}", "Try resizing terminal or type 'exit'."]
         except KeyboardInterrupt:
-            curses.noecho() # Ensure echo is off
+            curses.noecho() 
             last_command_output = ["Keyboard interrupt detected. Exiting..."]
             running = False
         except Exception as e:
-            curses.noecho() # Ensure echo is off
+            curses.noecho() 
             last_command_output = [
                 f"An unexpected error occurred: {e}",
                 "Check command syntax or internal logic."
@@ -445,6 +483,25 @@ def _curses_main_loop(stdscr):
     ]
     if not last_command_output or "Exiting program." not in last_command_output[-1]:
         last_command_output.append("Exiting program.")
+    
+    # Rebuild header one last time for final screen paint before exit
+    x_limit_display_str = f"{XLIM_MM:.0f}" if XLIM_MM != float('inf') else "INF (Disabled)"
+    y_limit_display_str = f"{YLIM_MM:.0f}" if YLIM_MM != float('inf') else "INF (Disabled)"
+    header = [
+        "--- CoreXY CLI Controller (Custom Commands) ---",
+        f"Effective Limits: X=[0, {x_limit_display_str}], Y=[0, {y_limit_display_str}] mm",
+        f"Resolution: {MM_PER_MICROSTEP} mm/microstep ({MICROSTEPS_PER_MM} microsteps/mm)",
+        f"Motor Native Steps/Rev: {MOTOR_NATIVE_STEPS_PER_REV}, Driver Microstepping: 1/{DRIVER_MICROSTEP_DIVISOR}",
+        f"Min Pulse Cycle Delay: {MINIMUM_PULSE_CYCLE_DELAY*1000:.3f} ms",
+        "Available commands:",
+        "  MOVE X<v> Y<v> [S<v>]",
+        "  ABS, REL",
+        "  HOME",
+        "  S<v> or S <v>",
+        "  LIMITS [ON|OFF]",
+        "  POS",
+        "  EXIT/QUIT"
+    ]
     draw_ui(stdscr, header, status, last_command_output, input_prompt_text)
     stdscr.refresh()
     time.sleep(1) 
