@@ -13,11 +13,18 @@ DIR_PIN_M1 = 5
 PUL_PIN_M2 = 27
 DIR_PIN_M2 = 17
 
+# --- NEW: Endstop GPIO Pin Configuration ---
+ENDSTOP_PIN_X = 26 # For X-axis
+ENDSTOP_PIN_Y = 16 # For Y-axis
+
 # --- GPIOZero Device Objects (will be initialized in setup_gpio) ---
 pul_device_m1 = None
 dir_device_m1 = None
 pul_device_m2 = None
 dir_device_m2 = None
+# --- NEW: Endstop Device Objects ---
+endstop_x = None
+endstop_y = None
 
 # --- Motor & System Parameters ---
 MOTOR_NATIVE_STEPS_PER_REV = 400
@@ -37,7 +44,11 @@ YLIM_MM = DEFAULT_YLIM_MM
 DEFAULT_SPEED_MM_S = 350.0       # Default speed in mm/s
 MAX_SPEED_MM_S = 450.0           # <<< NEW >>> Maximum allowable speed by user
 TARGET_SPEED_MM_S = min(DEFAULT_SPEED_MM_S, MAX_SPEED_MM_S) # Global target speed, ensure initial is not over max
-HOMING_SPEED_MM_S = 350.0        # Speed for HOME moves in mm/s (ensure this is also sensible, <= MAX_SPEED_MM_S if desired)
+HOMING_SPEED_MM_S = 350.0        # Speed for HOME moves in mm/s
+# --- NEW: Calibration Specific Parameters ---
+CALIBRATION_SPEED_MM_S = 150.0   # Speed for calibration moves
+CALIBRATION_BACKOFF_MM = 5.0     # Back-off distance after hitting endstop
+MAX_CALIBRATION_TRAVEL_MM = max(DEFAULT_XLIM_MM, DEFAULT_YLIM_MM) + 50.0 # Safety travel limit for calibration
 
 MIN_PULSE_WIDTH = 0.000002      # 2 microseconds (minimum pulse high time)
 MINIMUM_PULSE_CYCLE_DELAY = 0.0001 # 100µs -> max 10,000 step cycles/sec
@@ -53,12 +64,21 @@ last_command_output = []
 def setup_gpio():
     """Initializes GPIO pins. Returns True on success, False on failure."""
     global pul_device_m1, dir_device_m1, pul_device_m2, dir_device_m2
+    # --- NEW: Global declaration for endstop devices ---
+    global endstop_x, endstop_y
     try:
         pul_device_m1 = gpiozero.OutputDevice(PUL_PIN_M1, active_high=True, initial_value=False)
         dir_device_m1 = gpiozero.OutputDevice(DIR_PIN_M1, active_high=True, initial_value=False)
         pul_device_m2 = gpiozero.OutputDevice(PUL_PIN_M2, active_high=True, initial_value=False)
         dir_device_m2 = gpiozero.OutputDevice(DIR_PIN_M2, active_high=True, initial_value=False)
-        print("GPIO initialized successfully.")
+        
+        # --- NEW: Initialize Endstop Devices ---
+        # Assuming endstops are connected to GPIO and GND, use pull_up=True.
+        # When switch is pressed, input goes LOW (active).
+        endstop_x = gpiozero.InputDevice(ENDSTOP_PIN_X, pull_up=True)
+        endstop_y = gpiozero.InputDevice(ENDSTOP_PIN_Y, pull_up=True)
+        
+        print("GPIO initialized successfully (Motors and Endstops).")
         return True
     except Exception as e:
         print(f"Error during GPIO initialization: {e}")
@@ -72,6 +92,9 @@ def cleanup_gpio():
     if dir_device_m1: dir_device_m1.close()
     if pul_device_m2: pul_device_m2.close()
     if dir_device_m2: dir_device_m2.close()
+    # --- NEW: Cleanup Endstop Devices ---
+    if endstop_x: endstop_x.close()
+    if endstop_y: endstop_y.close()
     print("GPIO cleaned up.")
 
 def move_motors_coordinated(steps_m1_target, steps_m2_target, pulse_cycle_delay_for_move):
@@ -84,13 +107,13 @@ def move_motors_coordinated(steps_m1_target, steps_m2_target, pulse_cycle_delay_
         messages.append("Error: GPIO devices not initialized.")
         return messages
 
-    if steps_m1_target > 0: dir_device_m1.off() # Assuming off is one direction
-    else: dir_device_m1.on()                  # And on is the other
+    if steps_m1_target > 0: dir_device_m1.off() 
+    else: dir_device_m1.on()                  
 
-    if steps_m2_target > 0: dir_device_m2.off() # Assuming off is one direction
-    else: dir_device_m2.on()                  # And on is the other
+    if steps_m2_target > 0: dir_device_m2.off() 
+    else: dir_device_m2.on()                  
     
-    time.sleep(0.001) # Allow direction pins to settle
+    time.sleep(0.001) 
 
     abs_steps_m1 = abs(steps_m1_target)
     abs_steps_m2 = abs(steps_m2_target)
@@ -121,36 +144,6 @@ def move_corexy(delta_x_mm, delta_y_mm, pulse_cycle_delay_for_move):
     """
     global current_x_mm, current_y_mm
     motor_messages = []
-
-    # CoreXY kinematics:
-    # MotorA_steps = -X_steps + Y_steps
-    # MotorB_steps = -X_steps - Y_steps
-    # BUT, my previous interpretation for CoreXY might have X inverted or a motor direction inverted.
-    # The common CoreXY setup has:
-    # M1 (or A) = X + Y
-    # M2 (or B) = X - Y
-    # Let's re-evaluate the signs based on what "delta_x_mm" and "delta_y_mm" mean
-    # If positive delta_x_mm is move right, positive delta_y_mm is move "away" (further in Y)
-
-    # If M1 positive moves +X and +Y cartesian
-    # If M2 positive moves +X and -Y cartesian
-
-    # To move +X (1,0): M1 = 1, M2 = 1  => (M1+M2)/2 = X
-    # To move +Y (0,1): M1 = 1, M2 = -1 => (M1-M2)/2 = Y
-    
-    # So, X_cartesian = (M1+M2)/2 and Y_cartesian = (M1-M2)/2
-    # We want M1 and M2 from X_cartesian, Y_cartesian
-    # M1 = X_cartesian + Y_cartesian
-    # M2 = X_cartesian - Y_cartesian
-
-    # The code currently has:
-    # delta_x_steps_cartesian = round(-delta_x_mm * MICROSTEPS_PER_MM) <--- Note the negative
-    # delta_y_steps_cartesian = round(delta_y_mm * MICROSTEPS_PER_MM)
-    # steps_m1 = delta_x_steps_cartesian + delta_y_steps_cartesian
-    # steps_m2 = delta_x_steps_cartesian - delta_y_steps_cartesian
-    # This implies that a positive delta_x_mm results in negative delta_x_steps_cartesian.
-    # This might be intentional to map to a specific motor wiring or observed behavior.
-    # Let's stick to the existing logic for now, as changing it might break current user's setup.
     
     delta_x_steps_cartesian = round(-delta_x_mm * MICROSTEPS_PER_MM)
     delta_y_steps_cartesian = round(delta_y_mm * MICROSTEPS_PER_MM)
@@ -159,7 +152,7 @@ def move_corexy(delta_x_mm, delta_y_mm, pulse_cycle_delay_for_move):
     steps_m2 = delta_x_steps_cartesian - delta_y_steps_cartesian
     
     if steps_m1 == 0 and steps_m2 == 0:
-        pass # No motor movement needed
+        pass 
     else:
         motor_messages = move_motors_coordinated(int(steps_m1), int(steps_m2), pulse_cycle_delay_for_move)
 
@@ -169,6 +162,127 @@ def move_corexy(delta_x_mm, delta_y_mm, pulse_cycle_delay_for_move):
     current_x_mm = round(current_x_mm, 3) 
     current_y_mm = round(current_y_mm, 3)
     return motor_messages
+
+# --- NEW: Calibration Function ---
+def perform_calibration_cycle():
+    """
+    Performs a homing/calibration cycle for X and Y axes using endstops.
+    Moves towards negative X, then negative Y. Sets origin at trigger point, then backs off.
+    Returns a list of output messages.
+    """
+    global current_x_mm, current_y_mm, TARGET_SPEED_MM_S
+    output_messages = ["--- Starting Calibration Cycle ---"]
+
+    if not all([pul_device_m1, dir_device_m1, pul_device_m2, dir_device_m2, endstop_x, endstop_y]):
+        output_messages.append("Error: GPIOs or endstop devices not initialized for calibration.")
+        return output_messages
+
+    cal_speed = min(CALIBRATION_SPEED_MM_S, MAX_SPEED_MM_S) # Respect max speed
+    if cal_speed <= 1e-6:
+        output_messages.append(f"Error: Calibration speed {cal_speed:.2f} mm/s is too low.")
+        return output_messages
+        
+    # Pulse cycle delay for calibration speed: Speed = MM_PER_MICROSTEP / pulse_cycle_delay
+    pulse_cycle_delay_cal = MM_PER_MICROSTEP / cal_speed
+    actual_pulse_cycle_delay_cal = max(MINIMUM_PULSE_CYCLE_DELAY, pulse_cycle_delay_cal)
+
+    max_steps_travel = int(MAX_CALIBRATION_TRAVEL_MM * MICROSTEPS_PER_MM)
+
+    # --- Calibrate X-axis (moving towards negative X) ---
+    output_messages.append(f"Calibrating X-axis at {cal_speed:.2f} mm/s...")
+    # For -X cartesian: delta_x_mm is negative.
+    # delta_x_steps_cartesian = round(- (negative_delta_x_mm) * MICROSTEPS_PER_MM) -> positive
+    # steps_m1 = +delta_x_steps_cartesian, steps_m2 = +delta_x_steps_cartesian
+    # So, dir_device_m1.off() and dir_device_m2.off() (assuming .off() is for positive steps_m1/m2 target)
+    dir_device_m1.off() 
+    dir_device_m2.off() 
+    time.sleep(0.002) # Allow direction pins to settle
+
+    homed_x = False
+    for i in range(max_steps_travel):
+        if endstop_x.is_active: # is_active is True when GPIO pin is LOW (triggered)
+            output_messages.append("X-axis endstop triggered.")
+            homed_x = True
+            break
+        
+        pul_device_m1.on()
+        pul_device_m2.on()
+        time.sleep(MIN_PULSE_WIDTH)
+        pul_device_m1.off()
+        pul_device_m2.off()
+        
+        inter_pulse_delay = actual_pulse_cycle_delay_cal - MIN_PULSE_WIDTH
+        if inter_pulse_delay > 0:
+            time.sleep(inter_pulse_delay)
+        # Add a small delay to allow curses UI to refresh if needed, or check for Ctrl+C
+        if i > 0 and i % 2000 == 0: time.sleep(0.001)
+
+
+    if not homed_x:
+        output_messages.append("Error: X-axis calibration failed (endstop not triggered). Stopping.")
+        return output_messages
+    
+    current_x_mm = 0.0 # Origin placed at trigger point
+    output_messages.append(f"X-axis origin set at trigger point: {current_x_mm:.3f} mm.")
+
+    # Back-off X
+    output_messages.append(f"Backing off X-axis by {CALIBRATION_BACKOFF_MM:.2f} mm...")
+    # move_corexy updates current_x_mm internally
+    # The third argument to move_corexy is the pulse_cycle_delay for that specific move.
+    motor_msgs_bx = move_corexy(CALIBRATION_BACKOFF_MM, 0.0, actual_pulse_cycle_delay_cal)
+    if motor_msgs_bx: output_messages.extend(motor_msgs_bx)
+    output_messages.append(f"X-axis backed off. New position X={current_x_mm:.3f} mm.")
+
+    # --- Calibrate Y-axis (moving towards negative Y) ---
+    output_messages.append(f"Calibrating Y-axis at {cal_speed:.2f} mm/s...")
+    # For -Y cartesian: delta_y_mm is negative.
+    # delta_y_steps_cartesian = round((negative_delta_y_mm) * MICROSTEPS_PER_MM) -> negative
+    # steps_m1 = delta_y_steps_cartesian (negative)
+    # steps_m2 = -delta_y_steps_cartesian (positive)
+    # So, dir_device_m1.on() (for negative steps_m1) and dir_device_m2.off() (for positive steps_m2)
+    dir_device_m1.on()  
+    dir_device_m2.off() 
+    time.sleep(0.002) # Settle
+
+    homed_y = False
+    for i in range(max_steps_travel):
+        if endstop_y.is_active:
+            output_messages.append("Y-axis endstop triggered.")
+            homed_y = True
+            break
+        
+        pul_device_m1.on()
+        pul_device_m2.on()
+        time.sleep(MIN_PULSE_WIDTH)
+        pul_device_m1.off()
+        pul_device_m2.off()
+        
+        inter_pulse_delay = actual_pulse_cycle_delay_cal - MIN_PULSE_WIDTH
+        if inter_pulse_delay > 0:
+            time.sleep(inter_pulse_delay)
+        if i > 0 and i % 2000 == 0: time.sleep(0.001)
+
+
+    if not homed_y:
+        output_messages.append("Error: Y-axis calibration failed (endstop not triggered). Stopping.")
+        # current_x_mm might be at backoff, y is unknown. Consider what to do.
+        return output_messages
+
+    current_y_mm = 0.0 # Origin placed at trigger point
+    output_messages.append(f"Y-axis origin set at trigger point: {current_y_mm:.3f} mm.")
+
+    # Back-off Y
+    output_messages.append(f"Backing off Y-axis by {CALIBRATION_BACKOFF_MM:.2f} mm...")
+    motor_msgs_by = move_corexy(0.0, CALIBRATION_BACKOFF_MM, actual_pulse_cycle_delay_cal)
+    if motor_msgs_by: output_messages.extend(motor_msgs_by)
+    output_messages.append(f"Y-axis backed off. New position Y={current_y_mm:.3f} mm.")
+
+    output_messages.append(f"--- Calibration Cycle Complete ---")
+    output_messages.append(f"Final position after back-off: X={current_x_mm:.3f}, Y={current_y_mm:.3f} mm")
+    absolute_mode = True # Calibration implies an absolute reference point
+    output_messages.append("Mode set to ABS (Absolute).")
+    return output_messages
+
 
 def parse_command_and_execute(line):
     """
@@ -190,8 +304,13 @@ def parse_command_and_execute(line):
     elif instruction == "REL":
         absolute_mode = False
         output_messages.append("  Mode: Relative Positioning (REL)")
+    # --- NEW: CALIBRATE Command ---
+    elif instruction == "CALIBRATE" or instruction == "CAL":
+        output_messages.append("  Calibration initiated...")
+        cal_messages = perform_calibration_cycle()
+        output_messages.extend(cal_messages)
     elif instruction == "HOME":
-        output_messages.append("  Homing (HOME):")
+        output_messages.append("  Homing (HOME to logical 0,0):")
         target_x_abs = 0.0
         target_y_abs = 0.0
         
@@ -201,17 +320,14 @@ def parse_command_and_execute(line):
             dx_home = target_x_abs - current_x_mm
             dy_home = target_y_abs - current_y_mm
         
-        # Effective homing speed should also respect MAX_SPEED_MM_S if it were variable
-        # For now, HOMING_SPEED_MM_S is a constant, ensure it's <= MAX_SPEED_MM_S
         actual_homing_speed = min(HOMING_SPEED_MM_S, MAX_SPEED_MM_S)
-
         home_path_length_mm = math.sqrt(dx_home**2 + dy_home**2)
 
         if home_path_length_mm > (MM_PER_MICROSTEP / 2.0) and absolute_mode:
             output_messages.append(f"    Moving to 0,0 from {current_x_mm:.2f}, {current_y_mm:.2f} at {actual_homing_speed:.2f} mm/s")
             time_for_home_move_s = home_path_length_mm / actual_homing_speed
             
-            delta_x_steps_cartesian_home = round(-dx_home * MICROSTEPS_PER_MM) # Using consistent cartesian step calculation
+            delta_x_steps_cartesian_home = round(-dx_home * MICROSTEPS_PER_MM) 
             delta_y_steps_cartesian_home = round(dy_home * MICROSTEPS_PER_MM)
             steps_m1_home = delta_x_steps_cartesian_home + delta_y_steps_cartesian_home
             steps_m2_home = delta_x_steps_cartesian_home - delta_y_steps_cartesian_home
@@ -222,15 +338,15 @@ def parse_command_and_execute(line):
                 actual_pulse_delay_for_home_move = max(MINIMUM_PULSE_CYCLE_DELAY, pulse_delay_for_home_move)
                 motor_msgs = move_corexy(dx_home, dy_home, actual_pulse_delay_for_home_move)
                 output_messages.extend(motor_msgs)
-            else: # Should not happen if path_length is significant, but good to cover
+            else: 
                 current_x_mm = target_x_abs
                 current_y_mm = target_y_abs
-        else: # Already at home or in relative mode
+        else: 
             current_x_mm = target_x_abs
             current_y_mm = target_y_abs
             if absolute_mode:
-                 output_messages.append("    Already at (or very close to) 0,0.")
-            else: # In REL mode, HOME just resets coordinates without physical move
+                 output_messages.append("    Already at (or very close to) logical 0,0.")
+            else: 
                 output_messages.append("    Logical position reset to 0,0. No physical movement in REL for this HOME.")
         output_messages.append(f"  New position: X={current_x_mm:.3f} mm, Y={current_y_mm:.3f} mm")
             
@@ -246,7 +362,7 @@ def parse_command_and_execute(line):
                 return output_messages, True
 
             if speed_val_mm_s_req > 0:
-                if speed_val_mm_s_req > MAX_SPEED_MM_S: # <<< MODIFIED >>> Enforce max speed
+                if speed_val_mm_s_req > MAX_SPEED_MM_S: 
                     TARGET_SPEED_MM_S = MAX_SPEED_MM_S
                     output_messages.append(f"  Requested speed {speed_val_mm_s_req:.2f} mm/s exceeds limit of {MAX_SPEED_MM_S:.2f} mm/s.")
                     output_messages.append(f"  Global target speed set to MAX: {TARGET_SPEED_MM_S:.2f} mm/s")
@@ -281,7 +397,7 @@ def parse_command_and_execute(line):
     elif instruction == "MOVE" :
         target_x_cmd = None
         target_y_cmd = None
-        s_value_this_cmd_req = None # Requested speed for this move
+        s_value_this_cmd_req = None 
         
         for part in parts[1:]:
             if part.startswith('X'):
@@ -299,21 +415,18 @@ def parse_command_and_execute(line):
             output_messages.append("  No X or Y coordinate specified for MOVE.")
             return output_messages, True
 
-        current_move_speed_mm_s = TARGET_SPEED_MM_S # Start with global (already capped)
+        current_move_speed_mm_s = TARGET_SPEED_MM_S 
         if s_value_this_cmd_req is not None:
             if s_value_this_cmd_req > 0:
-                if s_value_this_cmd_req > MAX_SPEED_MM_S: # <<< MODIFIED >>> Enforce max speed for MOVE S
+                if s_value_this_cmd_req > MAX_SPEED_MM_S: 
                     current_move_speed_mm_s = MAX_SPEED_MM_S
                     output_messages.append(f"  Requested MOVE speed {s_value_this_cmd_req:.2f} mm/s exceeds limit of {MAX_SPEED_MM_S:.2f} mm/s.")
                     output_messages.append(f"  MOVE speed clamped to MAX: {current_move_speed_mm_s:.2f} mm/s.")
                 else:
                     current_move_speed_mm_s = s_value_this_cmd_req
-            else: # s_value_this_cmd_req <= 0
+            else: 
                 output_messages.append(f"  Speed S in MOVE must be positive. Using global {TARGET_SPEED_MM_S:.2f} mm/s (max {MAX_SPEED_MM_S:.2f} mm/s).")
         
-        # Ensure the final current_move_speed_mm_s is not above MAX_SPEED_MM_S
-        # This is mostly redundant if TARGET_SPEED_MM_S is already capped and s_value_this_cmd_req is capped,
-        # but acts as a final safeguard.
         current_move_speed_mm_s = min(current_move_speed_mm_s, MAX_SPEED_MM_S)
 
         final_target_x_mm = current_x_mm
@@ -329,10 +442,10 @@ def parse_command_and_execute(line):
         actual_target_y_mm = max(0.0, min(final_target_y_mm, YLIM_MM))
 
         clamped_output_needed = False
-        if XLIM_MM != float('inf'): # Only show clamping if limits are ON
-            if abs(actual_target_x_mm - final_target_x_mm) > 1e-9 or abs(actual_target_y_mm - final_target_y_mm) > 1e-9 : # check for float differences
+        if XLIM_MM != float('inf'): 
+            if abs(actual_target_x_mm - final_target_x_mm) > 1e-9 or abs(actual_target_y_mm - final_target_y_mm) > 1e-9 : 
                  clamped_output_needed = True
-        elif final_target_x_mm < 0 or final_target_y_mm < 0 : # If limits are INF, only clamp if target < 0
+        elif final_target_x_mm < 0 or final_target_y_mm < 0 : 
              clamped_output_needed = True
 
 
@@ -347,20 +460,20 @@ def parse_command_and_execute(line):
 
         if path_length_mm < (MM_PER_MICROSTEP / 2.0):
             output_messages.append(f"  Move too small or already at target. Current: ({current_x_mm:.3f}, {current_y_mm:.3f}), Target: ({actual_target_x_mm:.3f}, {actual_target_y_mm:.3f})")
-            current_x_mm = actual_target_x_mm # Ensure position is updated even if no move
+            current_x_mm = actual_target_x_mm 
             current_y_mm = actual_target_y_mm
             current_x_mm = round(current_x_mm,3) 
             current_y_mm = round(current_y_mm,3)
         else:
-            delta_x_steps_cartesian = round(-delta_x_to_move * MICROSTEPS_PER_MM) # Using consistent cartesian step calculation
+            delta_x_steps_cartesian = round(-delta_x_to_move * MICROSTEPS_PER_MM) 
             delta_y_steps_cartesian = round(delta_y_to_move * MICROSTEPS_PER_MM)
             steps_m1 = delta_x_steps_cartesian + delta_y_steps_cartesian
             steps_m2 = delta_x_steps_cartesian - delta_y_steps_cartesian
             num_iterations = max(abs(int(steps_m1)), abs(int(steps_m2)))
 
-            if num_iterations == 0: # Should be caught by path_length_mm check, but good for safety
+            if num_iterations == 0: 
                 output_messages.append("  No motor steps required for this move (delta too small).")
-                current_x_mm = actual_target_x_mm # Update position
+                current_x_mm = actual_target_x_mm 
                 current_y_mm = actual_target_y_mm
                 current_x_mm = round(current_x_mm,3)
                 current_y_mm = round(current_y_mm,3)
@@ -373,10 +486,10 @@ def parse_command_and_execute(line):
                     actual_pulse_delay_for_this_move = max(MINIMUM_PULSE_CYCLE_DELAY, pulse_delay_for_this_move)
                     
                     effective_speed_mm_s = 0 
-                    if (num_iterations * actual_pulse_delay_for_this_move) > 1e-9: # Avoid division by zero if delay is ~0
+                    if (num_iterations * actual_pulse_delay_for_this_move) > 1e-9: 
                         effective_speed_mm_s = path_length_mm / (num_iterations * actual_pulse_delay_for_this_move)
-                    else: # effectively infinite speed if delay is zero, or no iterations (already handled)
-                        effective_speed_mm_s = current_move_speed_mm_s # or some other indicator
+                    else: 
+                        effective_speed_mm_s = current_move_speed_mm_s 
 
                     output_messages.append(f"  Moving by dx={delta_x_to_move:.3f} mm, dy={delta_y_to_move:.3f} mm")
                     output_messages.append(f"  To X={actual_target_x_mm:.3f}, Y={actual_target_y_mm:.3f}")
@@ -392,9 +505,12 @@ def parse_command_and_execute(line):
         x_lim_display = f"{XLIM_MM:.0f}" if XLIM_MM != float('inf') else "INF (Disabled)"
         y_lim_display = f"{YLIM_MM:.0f}" if YLIM_MM != float('inf') else "INF (Disabled)"
         output_messages.append(f"  Current Position: X={current_x_mm:.3f} mm, Y={current_y_mm:.3f} mm")
-        output_messages.append(f"  Target Speed: {TARGET_SPEED_MM_S:.2f} mm/s (Max settable: {MAX_SPEED_MM_S:.2f} mm/s)") # <<< MODIFIED >>>
+        output_messages.append(f"  Target Speed: {TARGET_SPEED_MM_S:.2f} mm/s (Max settable: {MAX_SPEED_MM_S:.2f} mm/s)") 
         output_messages.append(f"  Mode: {'Absolute' if absolute_mode else 'Relative'}")
         output_messages.append(f"  Effective Limits: X=[0, {x_lim_display}], Y=[0, {y_lim_display}]")
+        # --- NEW: Display endstop status if desired ---
+        if endstop_x and endstop_y:
+            output_messages.append(f"  Endstop Status: X={'ACTIVE (pressed)' if endstop_x.is_active else 'Inactive'}, Y={'ACTIVE (pressed)' if endstop_y.is_active else 'Inactive'}")
 
 
     elif instruction in ["EXIT", "QUIT"]:
@@ -402,7 +518,7 @@ def parse_command_and_execute(line):
         return output_messages, False 
         
     else:
-        if instruction: # Only show error if there was an instruction
+        if instruction: 
             output_messages.append(f"  Unknown or unsupported command: {instruction}")
     
     return output_messages, True 
@@ -413,27 +529,23 @@ def draw_ui(stdscr, header_lines, status_lines, command_output_lines, input_prom
     max_y, max_x = stdscr.getmaxyx()
     current_y = 0
 
-    # Header
     for i, line in enumerate(header_lines):
         if current_y < max_y:
-            stdscr.addstr(current_y, 0, line[:max_x-1]) # Ensure text fits
+            stdscr.addstr(current_y, 0, line[:max_x-1]) 
             current_y += 1
-    if current_y < max_y: # Separator after header
+    if current_y < max_y: 
         stdscr.addstr(current_y, 0, "-" * (max_x -1) )
         current_y +=1
 
-    # Status
     for i, line in enumerate(status_lines):
         if current_y < max_y:
             stdscr.addstr(current_y, 0, line[:max_x-1])
             current_y += 1
-    if current_y < max_y: # Separator after status
+    if current_y < max_y: 
         stdscr.addstr(current_y, 0, "-" * (max_x-1) )
         current_y +=1
     
-    # Command Output (scrollable part)
     output_start_y = current_y
-    # Reserve 1 line for bottom separator, 1 for input prompt
     available_lines_for_output = max_y - output_start_y - 2 
     
     start_index = 0
@@ -441,18 +553,17 @@ def draw_ui(stdscr, header_lines, status_lines, command_output_lines, input_prom
         start_index = len(command_output_lines) - available_lines_for_output
     
     for i, line in enumerate(command_output_lines[start_index:]):
-        if output_start_y + i < max_y - 2: # Ensure we don't write over the input prompt area
+        if output_start_y + i < max_y - 2: 
             stdscr.addstr(output_start_y + i, 0, line[:max_x-1]) 
     
-    current_y = max_y - 2 # Position for separator above input
-    if current_y > 0 : # Check if there's space for the separator
+    current_y = max_y - 2 
+    if current_y > 0 : 
          stdscr.addstr(current_y, 0, "-" * (max_x-1) )
     
-    # Input Prompt
     input_line_y = max_y - 1
-    if input_line_y > 0: # Check if there's space for the input line
+    if input_line_y > 0: 
         stdscr.addstr(input_line_y, 0, input_prompt)
-        stdscr.move(input_line_y, len(input_prompt)) # Move cursor to end of prompt
+        stdscr.move(input_line_y, len(input_prompt)) 
 
     stdscr.refresh()
 
@@ -460,8 +571,8 @@ def _curses_main_loop(stdscr):
     """Main loop for the command-line interface, managed by curses."""
     global TARGET_SPEED_MM_S, current_x_mm, current_y_mm, absolute_mode, last_command_output, XLIM_MM, YLIM_MM
 
-    curses.curs_set(1) # Show cursor
-    stdscr.nodelay(False) # Blocking getstr
+    curses.curs_set(1) 
+    stdscr.nodelay(False)
 
     running = True
     while running:
@@ -471,7 +582,7 @@ def _curses_main_loop(stdscr):
         header = [
             "--- CoreXY CLI Controller (Custom Commands) ---",
             f"Max Settable Speed: {MAX_SPEED_MM_S:.2f} mm/s",
-            f"Optimal Speed : 350 mm/s",
+            f"Optimal Speed : {DEFAULT_SPEED_MM_S} mm/s, Calibration Speed: {CALIBRATION_SPEED_MM_S} mm/s", # MODIFIED
             f"Effective Limits: X=[0, {x_limit_display_str}], Y=[0, {y_limit_display_str}] mm",
             f"Resolution: {MM_PER_MICROSTEP} mm/microstep ({MICROSTEPS_PER_MM} microsteps/mm)",
             f"Motor Native Steps/Rev: {MOTOR_NATIVE_STEPS_PER_REV}, Driver Microstepping: 1/{DRIVER_MICROSTEP_DIVISOR}",
@@ -479,102 +590,93 @@ def _curses_main_loop(stdscr):
             "Available commands:",
             "  MOVE X<v> Y<v> [S<v>]",
             "  ABS, REL",
-            "  HOME",
+            "  HOME                   (Moves to logical 0,0 or resets coords)", # MODIFIED
+            "  CALIBRATE / CAL        (Physical homing with endstops)", # NEW
             "  S<v> or S <v>", 
             "  LIMITS [ON|OFF]", 
             "  POS",
             "  EXIT/QUIT"
         ]
-        status = [
+        status_info = [ # Renamed for clarity
             f"Current Position: X={current_x_mm:.3f} mm, Y={current_y_mm:.3f} mm",
             f"Target Speed: {TARGET_SPEED_MM_S:.2f} mm/s, Mode: {'ABS' if absolute_mode else 'REL'}"
         ]
+        # --- NEW: Append endstop status to live status if devices exist ---
+        if endstop_x and endstop_y:
+             status_info.append(f"Endstops: X={'TRIG' if endstop_x.is_active else 'open'}, Y={'TRIG' if endstop_y.is_active else 'open'}")
         
         input_prompt_text = "CoreXY > "
-        draw_ui(stdscr, header, status, last_command_output, input_prompt_text)
+        draw_ui(stdscr, header, status_info, last_command_output, input_prompt_text) # Use status_info
         
-        input_line_y = stdscr.getmaxyx()[0] - 1 # Y-coordinate for input line
+        input_line_y = stdscr.getmaxyx()[0] - 1 
         
         try:
-            # Ensure there's actually a line to get input from
-            if input_line_y > 0 and input_line_y > (len(header) + len(status) +2) : # check if space exists
-                 stdscr.move(input_line_y, len(input_prompt_text)) # Move cursor
-                 curses.echo() # Echo characters typed by the user
-                 cmd_line_bytes = stdscr.getstr(input_line_y, len(input_prompt_text), 60) # Get input
-                 curses.noecho() # Disable echo
+            if input_line_y > 0 and input_line_y > (len(header) + len(status_info) +2) : 
+                 stdscr.move(input_line_y, len(input_prompt_text)) 
+                 curses.echo() 
+                 cmd_line_bytes = stdscr.getstr(input_line_y, len(input_prompt_text), 60) 
+                 curses.noecho() 
                  cmd_line = cmd_line_bytes.decode('utf-8').strip()
-            else: # Terminal too small for input line
-                cmd_line = "" # Cannot get input, treat as empty command
+            else: 
+                cmd_line = "" 
                 last_command_output = ["Terminal too small. Resize or EXIT."]
-                # Forcing an exit might be too aggressive, let user type exit if they can see previous output
-                # running = False # Or provide a way to exit if this state persists
+                # running = False # Don't force exit, user might still type exit
 
 
-            if not cmd_line: # If user just presses Enter or line is empty
-                if not last_command_output or last_command_output[-1] != "Terminal too small. Resize or EXIT.":
-                    last_command_output = [] # Clear previous output if it wasn't the resize warning
+            if not cmd_line: 
+                if not last_command_output or (last_command_output and last_command_output[-1] != "Terminal too small. Resize or EXIT."):
+                    last_command_output = [] 
                 continue
 
             last_command_output, running = parse_command_and_execute(cmd_line)
 
         except curses.error as e:
-            curses.noecho() # Ensure echo is off on error
+            curses.noecho() 
             last_command_output = [f"Curses error: {e}", "Try resizing terminal or type 'exit'."]
         except KeyboardInterrupt:
             curses.noecho() 
             last_command_output = ["Keyboard interrupt detected. Exiting..."]
             running = False
-        except Exception as e: # Catch any other unexpected error
+        except Exception as e: 
             curses.noecho() 
             last_command_output = [
                 f"An unexpected error occurred: {e}",
                 "Check command syntax or internal logic."
             ]
-            # For debugging:
-            # import traceback
-            # last_command_output.append("Traceback:")
-            # last_command_output.extend(traceback.format_exc().splitlines())
             
-    # Final screen paint before exiting the curses wrapper
-    status = [ # Re-fetch status for final paint
+    status_info_final = [ 
         f"Current Position: X={current_x_mm:.3f} mm, Y={current_y_mm:.3f} mm",
         f"Target Speed: {TARGET_SPEED_MM_S:.2f} mm/s, Mode: {'ABS' if absolute_mode else 'REL'}"
     ]
     if not last_command_output or "Exiting program." not in last_command_output[-1]:
         last_command_output.append("Exiting program.")
     
-    # Rebuild header one last time for final screen paint before exit
     x_limit_display_str = f"{XLIM_MM:.0f}" if XLIM_MM != float('inf') else "INF (Disabled)"
     y_limit_display_str = f"{YLIM_MM:.0f}" if YLIM_MM != float('inf') else "INF (Disabled)"
-    header = [
+    header_final = [
         "--- CoreXY CLI Controller (Custom Commands) ---",
         f"Max Settable Speed: {MAX_SPEED_MM_S:.2f} mm/s",
         f"Effective Limits: X=[0, {x_limit_display_str}], Y=[0, {y_limit_display_str}] mm",
         f"Resolution: {MM_PER_MICROSTEP} mm/microstep ({MICROSTEPS_PER_MM} microsteps/mm)",
-        f"Motor Native Steps/Rev: {MOTOR_NATIVE_STEPS_PER_REV}, Driver Microstepping: 1/{DRIVER_MICROSTEP_DIVISOR}",
-        f"Min Pulse Cycle Delay: {MINIMUM_PULSE_CYCLE_DELAY*1000:.3f} ms",
-        "Available commands: ... (EXIT/QUIT to close)" # Simplified for final message
+        "Available commands: ... (EXIT/QUIT to close)" 
     ]
-    # Simplified call to draw_ui for the very last paint before curses ends.
-    # Might not be fully visible if curses cleanup is too fast.
     try:
-        draw_ui(stdscr, header, status, last_command_output, "Exited. ")
+        draw_ui(stdscr, header_final, status_info_final, last_command_output, "Exited. ")
         stdscr.refresh()
-        time.sleep(0.5) # Brief pause to see final message
+        time.sleep(0.5) 
     except curses.error:
-        pass # Curses might already be in a bad state if error occurred
+        pass 
 
 if __name__ == "__main__":
     if setup_gpio():
         try:
             curses.wrapper(_curses_main_loop)
-        except Exception as e: # Catch errors that might occur outside the wrapper's try/except
+        except Exception as e: 
             print(f"A critical error occurred outside curses main loop: {e}")
             import traceback
             traceback.print_exc()
         finally:
-            # curses.endwin() # curses.wrapper handles this
-            print("Cleaning up GPIO before exit...") # Will print after curses has ended
+            print("Cleaning up GPIO before exit...") 
             cleanup_gpio() 
             print("Program terminated.") 
     else:
