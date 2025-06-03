@@ -41,8 +41,8 @@ XLIM_MM = DEFAULT_XLIM_MM
 YLIM_MM = DEFAULT_YLIM_MM
 
 # --- Speed and Timing Parameters ---
-DEFAULT_SPEED_MM_S = 350.0       # Default speed in mm/s
-MAX_SPEED_MM_S = 450.0           # <<< NEW >>> Maximum allowable speed by user
+DEFAULT_SPEED_MM_S = 250.0       # Default speed in mm/s
+MAX_SPEED_MM_S = 280.0           # <<< NEW >>> Maximum allowable speed by user
 TARGET_SPEED_MM_S = min(DEFAULT_SPEED_MM_S, MAX_SPEED_MM_S) # Global target speed, ensure initial is not over max
 HOMING_SPEED_MM_S = 350.0        # Speed for HOME moves in mm/s
 # --- NEW: Calibration Specific Parameters ---
