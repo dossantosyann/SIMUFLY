@@ -55,6 +55,9 @@ absolute_mode = True
 
 # Curses UI state
 last_command_output = []
+# Global stdscr for UI updates outside main loop
+_stdscr_global = None 
+
 
 def setup_gpio():
     """Initializes GPIO pins. Returns True on success, False on failure."""
@@ -170,11 +173,13 @@ def calibrate_homing():
     Performs calibration by moving both axes negatively until their respective endstops are hit.
     Sets the current position of the hit axis to 0.
     """
-    global current_x_mm, current_y_mm
+    global current_x_mm, current_y_mm, last_command_output, _stdscr_global
     output_messages = []
     
     output_messages.append("  Starting calibration (CALIBRATE)...")
     output_messages.append(f"  Moving at {CALIBRATION_SPEED_MM_S:.2f} mm/s towards negative X and Y.")
+    last_command_output = output_messages[:] # Copy for display
+    _refresh_curses_ui() # Refresh UI
 
     # Calculate pulse delay for calibration speed (approx)
     temp_dx = -1.0
@@ -195,14 +200,21 @@ def calibrate_homing():
         calculated_pulse_cycle_delay = max(MINIMUM_PULSE_CYCLE_DELAY, calculated_pulse_cycle_delay)
 
     output_messages.append(f"  Calculated pulse delay for calibration: {calculated_pulse_cycle_delay*1000:.4f} ms.")
+    last_command_output = output_messages[:]
+    _refresh_curses_ui()
                 
     MAX_HOMING_ITERATIONS = int(max(DEFAULT_XLIM_MM, DEFAULT_YLIM_MM) / MM_PER_MICROSTEP * 2)
-    pulse_delay = calculated_pulse_cycle_delay
-
+    
     output_messages.append("  Moving individual motor microsteps towards endstops...")
+    last_command_output = output_messages[:]
+    _refresh_curses_ui()
 
     x_homed_finally = False
     y_homed_finally = False
+
+    # Store initial position for delta calculation
+    start_x_calibration_mm = current_x_mm
+    start_y_calibration_mm = current_y_mm
 
     # Homing X-axis
     output_messages.append("  Homing X-axis...")
@@ -212,7 +224,8 @@ def calibrate_homing():
 
     for i in range(MAX_HOMING_ITERATIONS):
         if endstop_x.is_active:
-            output_messages.append(f"    X endstop hit at approx {current_x_mm:.3f} mm.")
+            delta_x_traveled = start_x_calibration_mm - current_x_mm
+            output_messages.append(f"    X endstop hit! Traveled: {delta_x_traveled:.3f} mm.")
             current_x_mm = 0.0
             x_homed_finally = True
             break
@@ -227,12 +240,19 @@ def calibrate_homing():
         current_x_mm -= MM_PER_MICROSTEP # Approximation for X- movement
         current_x_mm = round(current_x_mm, 3)
         
-        if i % 100 == 0:
-            output_messages.append(f"    X Homing: {current_x_mm:.3f} mm...")
+        if i % 50 == 0: # Update UI every 50 steps
+            delta_x_traveled = start_x_calibration_mm - current_x_mm
+            output_messages[-1] = f"    X Homing: {current_x_mm:.3f} mm (Delta: {delta_x_traveled:.3f} mm)..."
+            last_command_output = output_messages[:]
+            _refresh_curses_ui()
         
         if current_x_mm < -(DEFAULT_XLIM_MM + 100):
             output_messages.append("    X-axis homing timeout: exceeded expected travel range.")
             break
+
+    # Re-copy output messages for Y-axis homing phase start
+    last_command_output = output_messages[:]
+    _refresh_curses_ui()
 
     # Homing Y-axis
     output_messages.append("  Homing Y-axis...")
@@ -242,7 +262,8 @@ def calibrate_homing():
 
     for i in range(MAX_HOMING_ITERATIONS):
         if endstop_y.is_active:
-            output_messages.append(f"    Y endstop hit at approx {current_y_mm:.3f} mm.")
+            delta_y_traveled = start_y_calibration_mm - current_y_mm
+            output_messages.append(f"    Y endstop hit! Traveled: {delta_y_traveled:.3f} mm.")
             current_y_mm = 0.0
             y_homed_finally = True
             break
@@ -257,8 +278,11 @@ def calibrate_homing():
         current_y_mm -= MM_PER_MICROSTEP # Approximation for Y- movement
         current_y_mm = round(current_y_mm, 3)
 
-        if i % 100 == 0:
-            output_messages.append(f"    Y Homing: {current_y_mm:.3f} mm...")
+        if i % 50 == 0: # Update UI every 50 steps
+            delta_y_traveled = start_y_calibration_mm - current_y_mm
+            output_messages[-1] = f"    Y Homing: {current_y_mm:.3f} mm (Delta: {delta_y_traveled:.3f} mm)..."
+            last_command_output = output_messages[:]
+            _refresh_curses_ui()
             
         if current_y_mm < -(DEFAULT_YLIM_MM + 100):
             output_messages.append("    Y-axis homing timeout: exceeded expected travel range.")
@@ -271,6 +295,8 @@ def calibrate_homing():
         output_messages.append(f"    X homed: {x_homed_finally}, Y homed: {y_homed_finally}")
 
     output_messages.append(f"  Final Position: X={current_x_mm:.3f} mm, Y={current_y_mm:.3f} mm")
+    last_command_output = output_messages[:] # Final update
+    _refresh_curses_ui()
 
     return output_messages
 
@@ -533,22 +559,17 @@ def draw_ui(stdscr, header_lines, status_lines, command_output_lines, input_prom
 
     stdscr.refresh()
 
-def _curses_main_loop(stdscr):
-    """Main loop for the command-line interface, managed by curses."""
-    global TARGET_SPEED_MM_S, current_x_mm, current_y_mm, absolute_mode, last_command_output, XLIM_MM, YLIM_MM
-
-    curses.curs_set(1) 
-    stdscr.nodelay(False)
-
-    running = True
-    while running:
+def _refresh_curses_ui():
+    """Helper function to refresh the UI immediately."""
+    global _stdscr_global
+    if _stdscr_global:
         x_limit_display_str = f"{XLIM_MM:.0f}" if XLIM_MM != float('inf') else "INF (Disabled)"
         y_limit_display_str = f"{YLIM_MM:.0f}" if YLIM_MM != float('inf') else "INF (Disabled)"
 
         header = [
             "--- CoreXY CLI Controller (Custom Commands) ---",
             f"Effective Limits: X=[0, {x_limit_display_str}], Y=[0, {y_limit_display_str}] mm",
-            f"Resolution: {MM_PER_MICROSTEP} mm/microstep ({MICROSTEPS_PER_MM} microsteps/mm)",
+            f"Resolution: {MM_PER_MICROSTEP} mm/microstep ({MICROSTEPS_PER_REV / DRIVER_MICROSTEP_DIVISOR:.0f} microsteps/rev)",
             f"Motor Native Steps/Rev: {MOTOR_NATIVE_STEPS_PER_REV}, Driver Microstepping: 1/{DRIVER_MICROSTEP_DIVISOR}",
             f"Min Pulse Cycle Delay: {MINIMUM_PULSE_CYCLE_DELAY*1000:.3f} ms",
             "Available commands:",
@@ -565,10 +586,22 @@ def _curses_main_loop(stdscr):
             f"Current Position: X={current_x_mm:.3f} mm, Y={current_y_mm:.3f} mm",
             f"Target Speed: {TARGET_SPEED_MM_S:.2f} mm/s, Mode: {'ABS' if absolute_mode else 'REL'}"
         ]
-        
         input_prompt_text = "CoreXY > "
-        draw_ui(stdscr, header, status, last_command_output, input_prompt_text)
-        
+        draw_ui(_stdscr_global, header, status, last_command_output, input_prompt_text)
+
+
+def _curses_main_loop(stdscr):
+    """Main loop for the command-line interface, managed by curses."""
+    global TARGET_SPEED_MM_S, current_x_mm, current_y_mm, absolute_mode, last_command_output, XLIM_MM, YLIM_MM, _stdscr_global
+
+    _stdscr_global = stdscr # Store stdscr globally for refresh calls
+    curses.curs_set(1) 
+    stdscr.nodelay(False)
+
+    running = True
+    while running:
+        _refresh_curses_ui() # Initial draw or redraw after command
+
         input_line_y = stdscr.getmaxyx()[0] - 1
         
         try:
@@ -586,14 +619,18 @@ def _curses_main_loop(stdscr):
                 continue
 
             last_command_output, running = parse_command_and_execute(cmd_line)
+            # After command execution, refresh UI to show results
+            _refresh_curses_ui()
 
         except curses.error as e:
             curses.noecho() 
             last_command_output = [f"Curses error: {e}", "Try resizing terminal or type 'exit'."]
+            _refresh_curses_ui()
         except KeyboardInterrupt:
             curses.noecho() 
             last_command_output = ["Keyboard interrupt detected. Exiting..."]
             running = False
+            _refresh_curses_ui()
         except Exception as e:
             curses.noecho() 
             last_command_output = [
@@ -602,6 +639,9 @@ def _curses_main_loop(stdscr):
             ]
             import traceback
             traceback.print_exc()
+            last_command_output.append("Traceback:")
+            last_command_output.extend(traceback.format_exc().splitlines())
+            _refresh_curses_ui()
             
     status = [ 
         f"Current Position: X={current_x_mm:.3f} mm, Y={current_y_mm:.3f} mm",
