@@ -569,8 +569,7 @@ def _refresh_curses_ui():
         header = [
             "--- CoreXY CLI Controller (Custom Commands) ---",
             f"Effective Limits: X=[0, {x_limit_display_str}], Y=[0, {y_limit_display_str}] mm",
-            f"Resolution: {MM_PER_MICROSTEP} mm/microstep ({MICROSTEPS_PER_REV / DRIVER_MICROSTEP_DIVISOR:.0f} microsteps/rev)",
-            f"Motor Native Steps/Rev: {MOTOR_NATIVE_STEPS_PER_REV}, Driver Microstepping: 1/{DRIVER_MICROSTEP_DIVISOR}",
+            f"Resolution: {MM_PER_MICROSTEP} mm/microstep ({MOTOR_NATIVE_STEPS_PER_REV * DRIVER_MICROSTEP_DIVISOR:.0f} microsteps/rev)",            f"Motor Native Steps/Rev: {MOTOR_NATIVE_STEPS_PER_REV}, Driver Microstepping: 1/{DRIVER_MICROSTEP_DIVISOR}",
             f"Min Pulse Cycle Delay: {MINIMUM_PULSE_CYCLE_DELAY*1000:.3f} ms",
             "Available commands:",
             "  MOVE X<v> Y<v> [S<v>]",
