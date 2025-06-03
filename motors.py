@@ -26,7 +26,7 @@ DRIVER_MICROSTEP_DIVISOR = 2
 MM_PER_MICROSTEP = 0.1
 if MM_PER_MICROSTEP == 0:
     raise ValueError("MM_PER_MICROSTEP cannot be zero.")
-MICROSTEPS_PER_MM = 1.0 / MM_PER_MICROSTEP
+MICROSTEPS_PER_MM = 0.1 / MM_PER_MICROSTEP
 
 # <<< MODIFIED >>> Store default limits and current effective limits
 DEFAULT_XLIM_MM = 1000.0
@@ -38,6 +38,9 @@ YLIM_MM = DEFAULT_YLIM_MM
 DEFAULT_SPEED_MM_S = 200.0       # Default speed in mm/s
 TARGET_SPEED_MM_S = DEFAULT_SPEED_MM_S # Global target speed, set by S command
 HOMING_SPEED_MM_S = 200.0        # Speed for HOME moves in mm/s
+
+# <<< ADDED >>> New Max Speed Parameter
+MAX_SPEED_MM_S = 450.0           # Maximum allowed speed in mm/s
 
 MIN_PULSE_WIDTH = 0.000002      # 2 microseconds (minimum pulse high time)
 # Minimum total time for a pulse cycle (on-wait-off-wait).
@@ -149,7 +152,7 @@ def parse_command_and_execute(line):
     Returns a tuple: (list_of_output_messages, continue_running_boolean).
     """
     # <<< MODIFIED >>> Added XLIM_MM, YLIM_MM to globals as they can be changed by LIMITS cmd
-    global current_x_mm, current_y_mm, absolute_mode, TARGET_SPEED_MM_S, XLIM_MM, YLIM_MM 
+    global current_x_mm, current_y_mm, absolute_mode, TARGET_SPEED_MM_S, XLIM_MM, YLIM_MM, MAX_SPEED_MM_S
     
     output_messages = []
     command = line.strip().upper()
@@ -215,7 +218,13 @@ def parse_command_and_execute(line):
                 return output_messages, True
 
             if speed_val_mm_s > 0:
-                TARGET_SPEED_MM_S = speed_val_mm_s
+                # <<< MODIFIED >>> Check against MAX_SPEED_MM_S
+                if speed_val_mm_s > MAX_SPEED_MM_S:
+                    output_messages.append(f"  Speed {speed_val_mm_s:.2f} mm/s exceeds maximum allowed speed ({MAX_SPEED_MM_S:.2f} mm/s).")
+                    output_messages.append(f"  Setting speed to {MAX_SPEED_MM_S:.2f} mm/s.")
+                    TARGET_SPEED_MM_S = MAX_SPEED_MM_S
+                else:
+                    TARGET_SPEED_MM_S = speed_val_mm_s
                 output_messages.append(f"  Global target speed set to: {TARGET_SPEED_MM_S:.2f} mm/s")
             else:
                 output_messages.append("  Speed S must be positive.")
@@ -267,8 +276,13 @@ def parse_command_and_execute(line):
         current_move_speed_mm_s = TARGET_SPEED_MM_S
         if s_value_this_cmd is not None:
             if s_value_this_cmd > 0:
-                current_move_speed_mm_s = s_value_this_cmd
-                # TARGET_SPEED_MM_S = current_move_speed_mm_s # Optional: update global S on MOVE S
+                # <<< MODIFIED >>> Check against MAX_SPEED_MM_S for MOVE command
+                if s_value_this_cmd > MAX_SPEED_MM_S:
+                    output_messages.append(f"  Speed {s_value_this_cmd:.2f} mm/s in MOVE exceeds maximum allowed speed ({MAX_SPEED_MM_S:.2f} mm/s).")
+                    output_messages.append(f"  Using {MAX_SPEED_MM_S:.2f} mm/s for this move.")
+                    current_move_speed_mm_s = MAX_SPEED_MM_S
+                else:
+                    current_move_speed_mm_s = s_value_this_cmd
             else:
                 output_messages.append(f"  Speed S in MOVE must be positive. Using global {TARGET_SPEED_MM_S:.2f} mm/s.")
         
@@ -408,14 +422,14 @@ def draw_ui(stdscr, header_lines, status_lines, command_output_lines, input_prom
 def _curses_main_loop(stdscr):
     """Main loop for the command-line interface, managed by curses."""
     # <<< MODIFIED >>> Add XLIM_MM, YLIM_MM to globals for header display
-    global TARGET_SPEED_MM_S, current_x_mm, current_y_mm, absolute_mode, last_command_output, XLIM_MM, YLIM_MM
+    global TARGET_SPEED_MM_S, current_x_mm, current_y_mm, absolute_mode, last_command_output, XLIM_MM, YLIM_MM, MAX_SPEED_MM_S
 
     curses.curs_set(1) 
     stdscr.nodelay(False)
 
     running = True
     while running:
-        # <<< MODIFIED >>> Header display for limits
+        # <<< MODIFIED >>> Header display for limits and max speed
         x_limit_display_str = f"{XLIM_MM:.0f}" if XLIM_MM != float('inf') else "INF (Disabled)"
         y_limit_display_str = f"{YLIM_MM:.0f}" if YLIM_MM != float('inf') else "INF (Disabled)"
 
@@ -425,6 +439,7 @@ def _curses_main_loop(stdscr):
             f"Resolution: {MM_PER_MICROSTEP} mm/microstep ({MICROSTEPS_PER_MM} microsteps/mm)",
             f"Motor Native Steps/Rev: {MOTOR_NATIVE_STEPS_PER_REV}, Driver Microstepping: 1/{DRIVER_MICROSTEP_DIVISOR}",
             f"Min Pulse Cycle Delay: {MINIMUM_PULSE_CYCLE_DELAY*1000:.3f} ms",
+            f"Max Speed: {MAX_SPEED_MM_S:.2f} mm/s", # <<< ADDED >>> Display max speed
             "Available commands:",
             "  MOVE X<v> Y<v> [S<v>]",
             "  ABS, REL",
@@ -493,6 +508,7 @@ def _curses_main_loop(stdscr):
         f"Resolution: {MM_PER_MICROSTEP} mm/microstep ({MICROSTEPS_PER_MM} microsteps/mm)",
         f"Motor Native Steps/Rev: {MOTOR_NATIVE_STEPS_PER_REV}, Driver Microstepping: 1/{DRIVER_MICROSTEP_DIVISOR}",
         f"Min Pulse Cycle Delay: {MINIMUM_PULSE_CYCLE_DELAY*1000:.3f} ms",
+        f"Max Speed: {MAX_SPEED_MM_S:.2f} mm/s", # <<< ADDED >>> Display max speed
         "Available commands:",
         "  MOVE X<v> Y<v> [S<v>]",
         "  ABS, REL",
