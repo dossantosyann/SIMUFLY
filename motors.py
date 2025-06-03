@@ -52,12 +52,10 @@ MAX_CALIBRATION_TRAVEL_MM = max(DEFAULT_XLIM_MM, DEFAULT_YLIM_MM) + 50.0 # Safet
 MIN_PULSE_WIDTH = 0.000002      # 2 microseconds (minimum pulse high time)
 MINIMUM_PULSE_CYCLE_DELAY = 0.0001 # 100µs -> max 10,000 step cycles/sec
 
-# --- NEW: Ramp Parameters ---
-RAMP_PERCENTAGE = 0.05  # Percentage of move steps for acceleration ramp
+# --- Ramp Parameters ---
+RAMP_PERCENTAGE = 0.05  # Percentage of move steps for acceleration/deceleration ramp
 RAMP_START_DELAY_MULTIPLIER = 3.0  # Start ramp with delay = target_delay * multiplier
-                                   # (e.g., 3.0 means starting at 1/3rd of target speed)
-MAX_START_PULSE_CYCLE_DELAY_FOR_RAMP = 0.01  # Max delay for the start of the ramp (e.g., 10ms)
-                                            # This prevents extremely slow starts if target speed is already very slow.
+MAX_START_PULSE_CYCLE_DELAY_FOR_RAMP = 0.01  # Max delay for the start/end of ramp (e.g., 10ms)
 
 # --- System State ---
 current_x_mm = 0.0
@@ -77,8 +75,8 @@ def setup_gpio():
         pul_device_m2 = gpiozero.OutputDevice(PUL_PIN_M2, active_high=True, initial_value=False)
         dir_device_m2 = gpiozero.OutputDevice(DIR_PIN_M2, active_high=True, initial_value=False)
         
-        endstop_x = gpiozero.InputDevice(ENDSTOP_PIN_X, pull_up=True) #
-        endstop_y = gpiozero.InputDevice(ENDSTOP_PIN_Y, pull_up=True) #
+        endstop_x = gpiozero.InputDevice(ENDSTOP_PIN_X, pull_up=True)
+        endstop_y = gpiozero.InputDevice(ENDSTOP_PIN_Y, pull_up=True)
         
         print("GPIO initialized successfully (Motors and Endstops).")
         return True
@@ -94,15 +92,14 @@ def cleanup_gpio():
     if dir_device_m1: dir_device_m1.close()
     if pul_device_m2: pul_device_m2.close()
     if dir_device_m2: dir_device_m2.close()
-    if endstop_x: endstop_x.close() #
-    if endstop_y: endstop_y.close() #
+    if endstop_x: endstop_x.close()
+    if endstop_y: endstop_y.close()
     print("GPIO cleaned up.")
 
 def move_motors_coordinated(steps_m1_target, steps_m2_target, pulse_cycle_delay_for_move):
     """
     Coordinates the movement of both motors for CoreXY motion with a specific pulse delay,
-    including an initial acceleration ramp.
-    Returns a list of messages if an error occurs, otherwise an empty list.
+    including initial acceleration and final deceleration ramps (trapezoidal profile).
     """
     messages = []
     if not all([pul_device_m1, dir_device_m1, pul_device_m2, dir_device_m2]):
@@ -119,54 +116,104 @@ def move_motors_coordinated(steps_m1_target, steps_m2_target, pulse_cycle_delay_
 
     abs_steps_m1 = abs(steps_m1_target)
     abs_steps_m2 = abs(steps_m2_target)
-    
     total_iterations = max(abs_steps_m1, abs_steps_m2)
 
     if total_iterations == 0:
-        return messages # No move needed
+        return messages
 
-    # --- Ramp Calculation ---
-    target_delay_at_cruise_speed = pulse_cycle_delay_for_move # Delay for the main constant speed part
+    # --- Trapezoidal Profile Calculation ---
+    target_cruise_delay = pulse_cycle_delay_for_move # Delay for the cruise speed phase
 
-    ramp_active = False
-    ramp_duration_steps = 0
-    actual_start_ramp_delay = target_delay_at_cruise_speed
+    # Initial ramp parameters (start/end delay is symmetrical for this profile)
+    _start_delay_uncapped = target_cruise_delay * RAMP_START_DELAY_MULTIPLIER
+    _calculated_initial_delay = min(_start_delay_uncapped, MAX_START_PULSE_CYCLE_DELAY_FOR_RAMP)
+    # effective_start_end_delay is the delay at the very start of accel and very end of decel
+    effective_start_end_delay = max(target_cruise_delay, _calculated_initial_delay)
 
-    # Only apply ramp if move is long enough for a meaningful ramp
-    # Check if total_iterations is large enough to make RAMP_PERCENTAGE * total_iterations >= 1 (or some threshold)
-    # For RAMP_PERCENTAGE = 0.05, total_iterations should be at least 20.
-    if total_iterations > (1.0 / RAMP_PERCENTAGE): 
-        ramp_duration_steps = int(RAMP_PERCENTAGE * total_iterations)
-        if ramp_duration_steps > 1: # Need at least a few steps for a ramp
-            # Calculate the initial delay for the ramp start (slower speed = larger delay)
-            start_ramp_delay_uncapped = target_delay_at_cruise_speed * RAMP_START_DELAY_MULTIPLIER
-            # Cap this initial delay to avoid extremely slow starts
-            calculated_initial_ramp_delay = min(start_ramp_delay_uncapped, MAX_START_PULSE_CYCLE_DELAY_FOR_RAMP)
+    use_ramps = False
+    ramp_segment_duration_steps = 0 # Number of steps for one ramp segment (accel or decel)
+
+    # Check if ramps are meaningful (start/end speed different from cruise) and move is long enough
+    if (effective_start_end_delay > target_cruise_delay + MIN_PULSE_WIDTH / 2.0) and total_iterations >= 4: # Min 2 steps per ramp
+        use_ramps = True
+        # Calculate ideal ramp segment length based on percentage
+        ramp_segment_duration_steps = max(1, int(RAMP_PERCENTAGE * total_iterations))
+
+    accel_phase_actual_steps = 0
+    cruise_phase_actual_steps = total_iterations # Default to all cruise if no ramps
+    decel_phase_actual_steps = 0
+    
+    delay_at_peak_or_cruise_start = target_cruise_delay # Actual delay when cruise starts or decel starts (if no cruise)
+
+    if use_ramps:
+        if total_iterations < 2 * ramp_segment_duration_steps:
+            # Short move: Ramps meet/overlap. No cruise phase.
+            # Accel takes first half, decel takes second half.
+            accel_phase_actual_steps = total_iterations // 2
+            decel_phase_actual_steps = total_iterations - accel_phase_actual_steps
+            cruise_phase_actual_steps = 0
             
-            # Ensure the ramp truly starts slower or at the same speed as the target cruise speed
-            actual_start_ramp_delay = max(target_delay_at_cruise_speed, calculated_initial_ramp_delay)
+            # Calculate the delay at the peak (end of accel phase / start of decel phase)
+            if accel_phase_actual_steps > 0:
+                # Interpolate from effective_start_end_delay towards target_cruise_delay over accel_phase_actual_steps
+                # The fraction here is 1.0 effectively, as we want the delay at the END of these accel_phase_actual_steps
+                fraction_at_peak = 1.0 
+                # However, if accel_phase_actual_steps is very short, it might not reach target_cruise_delay.
+                # The interpolation for step i handles this. We need the delay at step (accel_phase_actual_steps - 1).
+                if accel_phase_actual_steps == 1: # Single step accel
+                     delay_at_peak_or_cruise_start = effective_start_end_delay # Approx.
+                else:
+                     # Delay at the last step of the (shortened) accel ramp
+                     fraction = (accel_phase_actual_steps - 1.0) / float(accel_phase_actual_steps)
+                     delay_at_peak_or_cruise_start = effective_start_end_delay + \
+                                        (target_cruise_delay - effective_start_end_delay) * fraction
+                
+                # Ensure delay_at_peak_or_cruise_start does not "overshoot" target_cruise_delay in the wrong direction
+                if target_cruise_delay < effective_start_end_delay: # Normal accel case (target is faster speed = smaller delay)
+                    delay_at_peak_or_cruise_start = max(target_cruise_delay, delay_at_peak_or_cruise_start)
+                else: # Target is slower speed (larger delay) or same
+                    delay_at_peak_or_cruise_start = min(target_cruise_delay, delay_at_peak_or_cruise_start)
+            else: # No accel steps
+                delay_at_peak_or_cruise_start = effective_start_end_delay
 
-            # Ramp is active if the calculated start delay is effectively larger (slower) than the target cruise delay
-            if actual_start_ramp_delay > (target_delay_at_cruise_speed + MIN_PULSE_WIDTH / 2.0): # Add small tolerance
-                ramp_active = True
-            else: # If starting delay is same as target, no ramp needed
-                ramp_duration_steps = 0 
-        else: # ramp_duration_steps <=1, not enough for a ramp
-             ramp_duration_steps = 0
-    # --- End Ramp Calculation ---
+        else: # Long move: Full ramps and cruise possible
+            accel_phase_actual_steps = ramp_segment_duration_steps
+            decel_phase_actual_steps = ramp_segment_duration_steps
+            cruise_phase_actual_steps = total_iterations - accel_phase_actual_steps - decel_phase_actual_steps
+            delay_at_peak_or_cruise_start = target_cruise_delay # Will reach target cruise speed/delay
+    
+    # Step indices for phase transitions (i from 0 to total_iterations - 1)
+    # Accel phase: i from 0 to accel_phase_actual_steps - 1
+    # Cruise phase: i from accel_phase_actual_steps to accel_phase_actual_steps + cruise_phase_actual_steps - 1
+    # Decel phase: i from accel_phase_actual_steps + cruise_phase_actual_steps to total_iterations - 1
 
     for i in range(total_iterations):
-        current_pulse_cycle_delay_for_step = target_delay_at_cruise_speed
+        current_step_delay = target_cruise_delay # Default for cruise phase
 
-        if ramp_active and i < ramp_duration_steps:
-            # Linearly interpolate pulse delay from actual_start_ramp_delay down to target_delay_at_cruise_speed
-            fraction_of_ramp_completed = i / float(ramp_duration_steps) # float division essential
-            current_pulse_cycle_delay_for_step = actual_start_ramp_delay + \
-                                                 (target_delay_at_cruise_speed - actual_start_ramp_delay) * fraction_of_ramp_completed
-        # Else, it remains target_delay_at_cruise_speed (constant speed phase)
+        if use_ramps and i < accel_phase_actual_steps:
+            # --- Acceleration Phase ---
+            if accel_phase_actual_steps > 0:
+                fraction_completed = i / float(accel_phase_actual_steps)
+                current_step_delay = effective_start_end_delay + \
+                                   (target_cruise_delay - effective_start_end_delay) * fraction_completed
+            else: # Should not happen if accel_phase_actual_steps is 0 and use_ramps is true for accel
+                current_step_delay = target_cruise_delay
         
-        # Ensure the delay is not less than the system's minimum capability
-        current_pulse_cycle_delay_for_step = max(MINIMUM_PULSE_CYCLE_DELAY, current_pulse_cycle_delay_for_step)
+        elif use_ramps and i >= (accel_phase_actual_steps + cruise_phase_actual_steps):
+            # --- Deceleration Phase ---
+            if decel_phase_actual_steps > 0:
+                step_into_decel = i - (accel_phase_actual_steps + cruise_phase_actual_steps)
+                fraction_completed = step_into_decel / float(decel_phase_actual_steps)
+                
+                # Deceleration starts from the speed/delay achieved before this phase
+                # This is delay_at_peak_or_cruise_start
+                current_step_delay = delay_at_peak_or_cruise_start + \
+                                   (effective_start_end_delay - delay_at_peak_or_cruise_start) * fraction_completed
+            else: # Should not happen
+                 current_step_delay = target_cruise_delay
+        # Else: --- Cruise Phase --- (current_step_delay is already target_cruise_delay)
+
+        current_step_delay = max(MINIMUM_PULSE_CYCLE_DELAY, current_step_delay)
 
         # --- Pulse Generation ---
         perform_pulse_m1 = (i < abs_steps_m1)
@@ -174,13 +221,11 @@ def move_motors_coordinated(steps_m1_target, steps_m2_target, pulse_cycle_delay_
 
         if perform_pulse_m1: pul_device_m1.on()
         if perform_pulse_m2: pul_device_m2.on()
-        
         time.sleep(MIN_PULSE_WIDTH)
-
         if perform_pulse_m1: pul_device_m1.off()
         if perform_pulse_m2: pul_device_m2.off()
         
-        inter_pulse_delay = current_pulse_cycle_delay_for_step - MIN_PULSE_WIDTH
+        inter_pulse_delay = current_step_delay - MIN_PULSE_WIDTH
         if inter_pulse_delay > 0:
             time.sleep(inter_pulse_delay)
             
@@ -225,7 +270,7 @@ def perform_calibration_cycle():
         output_messages.append("Error: GPIOs or endstop devices not initialized for calibration.")
         return output_messages
 
-    cal_speed = min(CALIBRATION_SPEED_MM_S, MAX_SPEED_MM_S) # Respect max speed
+    cal_speed = min(CALIBRATION_SPEED_MM_S, MAX_SPEED_MM_S)
     if cal_speed <= 1e-6:
         output_messages.append(f"Error: Calibration speed {cal_speed:.2f} mm/s is too low.")
         return output_messages
@@ -233,18 +278,18 @@ def perform_calibration_cycle():
     pulse_cycle_delay_cal = MM_PER_MICROSTEP / cal_speed
     actual_pulse_cycle_delay_cal = max(MINIMUM_PULSE_CYCLE_DELAY, pulse_cycle_delay_cal)
 
-    max_steps_travel = int(MAX_CALIBRATION_TRAVEL_MM * MICROSTEPS_PER_MM) #
+    max_steps_travel = int(MAX_CALIBRATION_TRAVEL_MM * MICROSTEPS_PER_MM)
 
     # --- Calibrate X-axis (moving towards negative X) ---
-    output_messages.append(f"Calibrating X-axis at {cal_speed:.2f} mm/s...") #
+    output_messages.append(f"Calibrating X-axis at {cal_speed:.2f} mm/s...")
     dir_device_m1.off() 
     dir_device_m2.off() 
-    time.sleep(0.002) 
+    time.sleep(0.002)
 
     homed_x = False
     for i in range(max_steps_travel):
         if endstop_x.is_active: 
-            output_messages.append("X-axis endstop triggered.") #
+            output_messages.append("X-axis endstop triggered.")
             homed_x = True
             break
         
@@ -261,27 +306,28 @@ def perform_calibration_cycle():
 
 
     if not homed_x:
-        output_messages.append("Error: X-axis calibration failed (endstop not triggered). Stopping.") #
+        output_messages.append("Error: X-axis calibration failed (endstop not triggered). Stopping.")
         return output_messages
     
     current_x_mm = 0.0 
-    output_messages.append(f"X-axis origin set at trigger point: {current_x_mm:.3f} mm.") #
+    output_messages.append(f"X-axis origin set at trigger point: {current_x_mm:.3f} mm.")
 
-    output_messages.append(f"Backing off X-axis by {CALIBRATION_BACKOFF_MM:.2f} mm...") #
-    motor_msgs_bx = move_corexy(CALIBRATION_BACKOFF_MM, 0.0, actual_pulse_cycle_delay_cal) #
+    output_messages.append(f"Backing off X-axis by {CALIBRATION_BACKOFF_MM:.2f} mm...")
+    # Note: Back-off moves will also use the new trapezoidal profile if long enough
+    motor_msgs_bx = move_corexy(CALIBRATION_BACKOFF_MM, 0.0, actual_pulse_cycle_delay_cal)
     if motor_msgs_bx: output_messages.extend(motor_msgs_bx)
-    output_messages.append(f"X-axis backed off. New position X={current_x_mm:.3f} mm.") #
+    output_messages.append(f"X-axis backed off. New position X={current_x_mm:.3f} mm.")
 
     # --- Calibrate Y-axis (moving towards negative Y) ---
-    output_messages.append(f"Calibrating Y-axis at {cal_speed:.2f} mm/s...") #
+    output_messages.append(f"Calibrating Y-axis at {cal_speed:.2f} mm/s...")
     dir_device_m1.on()  
     dir_device_m2.off() 
-    time.sleep(0.002) 
+    time.sleep(0.002)
 
     homed_y = False
     for i in range(max_steps_travel):
         if endstop_y.is_active:
-            output_messages.append("Y-axis endstop triggered.") #
+            output_messages.append("Y-axis endstop triggered.")
             homed_y = True
             break
         
@@ -296,23 +342,22 @@ def perform_calibration_cycle():
             time.sleep(inter_pulse_delay)
         if i > 0 and i % 2000 == 0: time.sleep(0.001)
 
-
     if not homed_y:
-        output_messages.append("Error: Y-axis calibration failed (endstop not triggered). Stopping.") #
+        output_messages.append("Error: Y-axis calibration failed (endstop not triggered). Stopping.")
         return output_messages
 
-    current_y_mm = 0.0 
-    output_messages.append(f"Y-axis origin set at trigger point: {current_y_mm:.3f} mm.") #
+    current_y_mm = 0.0
+    output_messages.append(f"Y-axis origin set at trigger point: {current_y_mm:.3f} mm.")
 
-    output_messages.append(f"Backing off Y-axis by {CALIBRATION_BACKOFF_MM:.2f} mm...") #
-    motor_msgs_by = move_corexy(0.0, CALIBRATION_BACKOFF_MM, actual_pulse_cycle_delay_cal) #
+    output_messages.append(f"Backing off Y-axis by {CALIBRATION_BACKOFF_MM:.2f} mm...")
+    motor_msgs_by = move_corexy(0.0, CALIBRATION_BACKOFF_MM, actual_pulse_cycle_delay_cal)
     if motor_msgs_by: output_messages.extend(motor_msgs_by)
-    output_messages.append(f"Y-axis backed off. New position Y={current_y_mm:.3f} mm.") #
+    output_messages.append(f"Y-axis backed off. New position Y={current_y_mm:.3f} mm.")
 
-    output_messages.append(f"--- Calibration Cycle Complete ---") #
-    output_messages.append(f"Final position after back-off: X={current_x_mm:.3f}, Y={current_y_mm:.3f} mm") #
+    output_messages.append(f"--- Calibration Cycle Complete ---")
+    output_messages.append(f"Final position after back-off: X={current_x_mm:.3f}, Y={current_y_mm:.3f} mm")
     absolute_mode = True 
-    output_messages.append("Mode set to ABS (Absolute).") #
+    output_messages.append("Mode set to ABS (Absolute).")
     return output_messages
 
 
@@ -336,10 +381,10 @@ def parse_command_and_execute(line):
     elif instruction == "REL":
         absolute_mode = False
         output_messages.append("  Mode: Relative Positioning (REL)")
-    elif instruction == "CALIBRATE" or instruction == "CAL": #
-        output_messages.append("  Calibration initiated...") #
-        cal_messages = perform_calibration_cycle() #
-        output_messages.extend(cal_messages) #
+    elif instruction == "CALIBRATE" or instruction == "CAL":
+        output_messages.append("  Calibration initiated...")
+        cal_messages = perform_calibration_cycle()
+        output_messages.extend(cal_messages)
     elif instruction == "HOME":
         output_messages.append("  Homing (HOME to logical 0,0):")
         target_x_abs = 0.0
@@ -539,8 +584,8 @@ def parse_command_and_execute(line):
         output_messages.append(f"  Target Speed: {TARGET_SPEED_MM_S:.2f} mm/s (Max settable: {MAX_SPEED_MM_S:.2f} mm/s)") 
         output_messages.append(f"  Mode: {'Absolute' if absolute_mode else 'Relative'}")
         output_messages.append(f"  Effective Limits: X=[0, {x_lim_display}], Y=[0, {y_lim_display}]")
-        if endstop_x and endstop_y: #
-            output_messages.append(f"  Endstop Status: X={'ACTIVE (pressed)' if endstop_x.is_active else 'Inactive'}, Y={'ACTIVE (pressed)' if endstop_y.is_active else 'Inactive'}") #
+        if endstop_x and endstop_y:
+            output_messages.append(f"  Endstop Status: X={'ACTIVE (pressed)' if endstop_x.is_active else 'Inactive'}, Y={'ACTIVE (pressed)' if endstop_y.is_active else 'Inactive'}")
 
 
     elif instruction in ["EXIT", "QUIT"]:
@@ -611,8 +656,8 @@ def _curses_main_loop(stdscr):
 
         header = [
             "--- CoreXY CLI Controller (Custom Commands) ---",
-            f"Max Settable Speed: {MAX_SPEED_MM_S:.2f} mm/s", #
-            f"Optimal Speed : {DEFAULT_SPEED_MM_S} mm/s, Calibration Speed: {CALIBRATION_SPEED_MM_S} mm/s", #
+            f"Max Settable Speed: {MAX_SPEED_MM_S:.2f} mm/s",
+            f"Optimal Speed : {DEFAULT_SPEED_MM_S} mm/s, Calibration Speed: {CALIBRATION_SPEED_MM_S} mm/s",
             f"Effective Limits: X=[0, {x_limit_display_str}], Y=[0, {y_limit_display_str}] mm",
             f"Resolution: {MM_PER_MICROSTEP} mm/microstep ({MICROSTEPS_PER_MM} microsteps/mm)",
             f"Motor Native Steps/Rev: {MOTOR_NATIVE_STEPS_PER_REV}, Driver Microstepping: 1/{DRIVER_MICROSTEP_DIVISOR}",
@@ -620,8 +665,8 @@ def _curses_main_loop(stdscr):
             "Available commands:",
             "  MOVE X<v> Y<v> [S<v>]",
             "  ABS, REL",
-            "  HOME                   (Moves to logical 0,0 or resets coords)", #
-            "  CALIBRATE / CAL        (Physical homing with endstops)", #
+            "  HOME                   (Moves to logical 0,0 or resets coords)",
+            "  CALIBRATE / CAL        (Physical homing with endstops)",
             "  S<v> or S <v>", 
             "  LIMITS [ON|OFF]", 
             "  POS",
@@ -631,8 +676,8 @@ def _curses_main_loop(stdscr):
             f"Current Position: X={current_x_mm:.3f} mm, Y={current_y_mm:.3f} mm",
             f"Target Speed: {TARGET_SPEED_MM_S:.2f} mm/s, Mode: {'ABS' if absolute_mode else 'REL'}"
         ]
-        if endstop_x and endstop_y: #
-             status_info.append(f"Endstops: X={'TRIG' if endstop_x.is_active else 'open'}, Y={'TRIG' if endstop_y.is_active else 'open'}") #
+        if endstop_x and endstop_y:
+             status_info.append(f"Endstops: X={'TRIG' if endstop_x.is_active else 'open'}, Y={'TRIG' if endstop_y.is_active else 'open'}")
         
         input_prompt_text = "CoreXY > "
         draw_ui(stdscr, header, status_info, last_command_output, input_prompt_text) 
@@ -649,7 +694,6 @@ def _curses_main_loop(stdscr):
             else: 
                 cmd_line = "" 
                 last_command_output = ["Terminal too small. Resize or EXIT."]
-
 
             if not cmd_line: 
                 if not last_command_output or (last_command_output and last_command_output[-1] != "Terminal too small. Resize or EXIT."):
