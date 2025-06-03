@@ -41,11 +41,11 @@ XLIM_MM = DEFAULT_XLIM_MM
 YLIM_MM = DEFAULT_YLIM_MM
 
 # --- Speed and Timing Parameters ---
-DEFAULT_SPEED_MM_S = 250.0       # Default speed in mm/s
-MAX_SPEED_MM_S = 280.0           # Maximum allowable speed by user
+DEFAULT_SPEED_MM_S = 400.0       # Default speed in mm/s
+MAX_SPEED_MM_S = 400.0           # Maximum allowable speed by user
 TARGET_SPEED_MM_S = min(DEFAULT_SPEED_MM_S, MAX_SPEED_MM_S) # Global target speed
 HOMING_SPEED_MM_S = 350.0        # Speed for HOME moves in mm/s
-CALIBRATION_SPEED_MM_S = 150.0   # Speed for calibration moves
+CALIBRATION_SPEED_MM_S = 100.0   # Speed for calibration moves
 CALIBRATION_BACKOFF_MM = 5.0     # Back-off distance after hitting endstop
 MAX_CALIBRATION_TRAVEL_MM = max(DEFAULT_XLIM_MM, DEFAULT_YLIM_MM) + 50.0 # Safety travel limit for calibration
 
@@ -657,7 +657,7 @@ def _curses_main_loop(stdscr):
         header = [
             "--- CoreXY CLI Controller (Custom Commands) ---",
             f"Max Settable Speed: {MAX_SPEED_MM_S:.2f} mm/s",
-            f"Optimal Speed : {DEFAULT_SPEED_MM_S} mm/s, Calibration Speed: {CALIBRATION_SPEED_MM_S} mm/s",
+            f"Calibration Speed: {CALIBRATION_SPEED_MM_S} mm/s",
             f"Effective Limits: X=[0, {x_limit_display_str}], Y=[0, {y_limit_display_str}] mm",
             f"Resolution: {MM_PER_MICROSTEP} mm/microstep ({MICROSTEPS_PER_MM} microsteps/mm)",
             f"Motor Native Steps/Rev: {MOTOR_NATIVE_STEPS_PER_REV}, Driver Microstepping: 1/{DRIVER_MICROSTEP_DIVISOR}",
