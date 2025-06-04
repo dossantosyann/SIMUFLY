@@ -80,6 +80,9 @@ RAMP_PERCENTAGE = 0.05  # Percentage of move steps for acceleration/deceleration
 RAMP_START_DELAY_MULTIPLIER = 3.0  # Start ramp with delay = target_delay * multiplier
 MAX_START_PULSE_CYCLE_DELAY_FOR_RAMP = 0.01  # Max delay for the start/end of ramp (e.g., 10ms)
 
+# --- Automatic Mode Scan Parameters --- 
+POINT_MARGIN_MM = 10.0  # Marge des points de scan par rapport aux limites XLIM_MM, YLIM_MM
+
 # --- System State ---
 current_x_mm = 0.0
 current_y_mm = 0.0
@@ -701,38 +704,79 @@ def _get_int_input_curses(stdscr, y, x, prompt_text, min_val=None, max_val=None)
             stdscr.move(y + 1, x); stdscr.clrtoeol() # Clear error
             continue # Retry input
 
-def _get_int_input_curses(stdscr, y, x, prompt_text, min_val=None, max_val=None):
-    """Gets an integer input, validates, and returns it or None."""
-    while True:
-        input_str = _get_string_input_curses(stdscr, y, x, prompt_text, 20)
-        if not input_str: # User pressed Enter on empty
-            return None 
-        try:
-            val = int(input_str)
-            if (min_val is not None and val < min_val) or \
-               (max_val is not None and val > max_val):
-                range_err = f" (Doit être entre {min_val} et {max_val})" if min_val is not None and max_val is not None \
-                       else f" (Doit être >= {min_val})" if min_val is not None \
-                       else f" (Doit être <= {max_val})" if max_val is not None \
-                       else ""
-                stdscr.addstr(y + 1, x, f"Valeur invalide{range_err}. Réessayez ou ESC.")
-                stdscr.clrtoeol()
-                stdscr.refresh()
-                key = stdscr.getch() # Wait for a key press before trying again
-                if key == 27: return None # ESC to cancel
-                stdscr.move(y + 1, x); stdscr.clrtoeol() # Clear error
-                continue
-            return val
-        except ValueError:
-            stdscr.addstr(y + 1, x, "Entrée numérique invalide. Réessayez ou ESC.")
-            stdscr.clrtoeol()
-            stdscr.refresh()
-            key = stdscr.getch()
-            if key == 27: return None # ESC to cancel
-            stdscr.move(y + 1, x); stdscr.clrtoeol() # Clear error
+# --- Automatic Mode Functions ---
+
+# NOUVELLE FONCTION
+def _calculate_scan_positions(nx, ny, current_xlim_mm, current_ylim_mm, point_margin):
+    """
+    Calcule les positions de scan en serpentin à l'intérieur des limites données.
+    current_xlim_mm et current_ylim_mm définissent les coordonnées maximales utilisables.
+    point_margin est la distance des points extérieurs par rapport aux limites.
+    Retourne une liste de tuples (x, y) ou (None, message_erreur).
+    """
+    positions = []
+    
+    if nx <= 0 or ny <= 0:
+        return None, "Le nombre de points X (nx) et Y (ny) doit être positif."
+
+    # Zone effective pour le placement des centres des points de capture
+    scan_area_x_min = point_margin
+    scan_area_x_max = current_xlim_mm - point_margin
+    scan_area_y_min = point_margin
+    scan_area_y_max = current_ylim_mm - point_margin
+
+    # Vérifier si la zone de scan est valide
+    if scan_area_x_min > scan_area_x_max : # Vérification plus simple
+        if nx == 1 and current_xlim_mm >=0: # Un seul point peut être au centre
+             pass # Ok pour nx=1 si xlim >= 0, le point sera à xlim/2
+        else:
+             return None, f"Largeur X ({current_xlim_mm}mm) insuffisante pour {nx} points avec marge de {point_margin}mm."
+    
+    if scan_area_y_min > scan_area_y_max :
+        if ny == 1 and current_ylim_mm >=0:
+            pass # Ok pour ny=1
+        else:
+            return None, f"Hauteur Y ({current_ylim_mm}mm) insuffisante pour {ny} points avec marge de {point_margin}mm."
+
+    x_coords_list = []
+    if nx == 1:
+        # Centrer le point si current_xlim_mm est défini.
+        # S'assurer que XLIM_MM n'est pas inférieur à la marge d'une manière qui rendrait le calcul illogique.
+        # Pour un seul point, le placer au centre de la zone totale XLIM_MM.
+        x_coords_list.append(current_xlim_mm / 2.0)
+    else:
+        width_for_points = scan_area_x_max - scan_area_x_min
+        step_x = width_for_points / (nx - 1)
+        for i in range(nx):
+            x_coords_list.append(scan_area_x_min + i * step_x)
+
+    y_coords_list = []
+    if ny == 1:
+        y_coords_list.append(current_ylim_mm / 2.0)
+    else:
+        height_for_points = scan_area_y_max - scan_area_y_min
+        step_y = height_for_points / (ny - 1)
+        for i in range(ny):
+            y_coords_list.append(scan_area_y_min + i * step_y)
+
+    # Générer le chemin en serpentin
+    for i_y in range(ny):
+        current_y_val = y_coords_list[i_y]
+        
+        # Pour le serpentin, inverser les coordonnées x sur les lignes impaires
+        current_x_row_iter = x_coords_list if i_y % 2 == 0 else reversed(x_coords_list)
+        
+        for current_x_val in current_x_row_iter:
+            # S'assurer que les points sont dans les limites absolues [0, XLIM_MM] et [0, YLIM_MM]
+            # Le calcul utilisant scan_area_min/max devrait déjà garantir cela.
+            # Arrondir pour la propreté et pour éviter les problèmes de flottants minimes.
+            final_x = round(max(0.0, min(current_x_val, current_xlim_mm)), 3)
+            final_y = round(max(0.0, min(current_y_val, current_ylim_mm)), 3)
+            positions.append((final_x, final_y))
+            
+    return positions, f"{len(positions)} positions calculées avec succès."
 
 
-# --- NEW: Automatic Mode Functions ---
 def draw_automatic_mode_ui(stdscr, title, prompts, current_values, status_message="", help_message=""):
     """Draws the UI for the automatic mode."""
     stdscr.clear()
@@ -744,92 +788,103 @@ def draw_automatic_mode_ui(stdscr, title, prompts, current_values, status_messag
 
     # Prompts and current values
     line_y = 4
-    for i, prompt in enumerate(prompts):
-        val_str = str(current_values.get(prompt, "..."))
-        display_str = f"{prompt}: {val_str}"
+    for i, prompt_key in enumerate(prompts): # prompts is now a list of keys
+        val_str = str(current_values.get(prompt_key, "..."))
+        display_str = f"{prompt_key}: {val_str}" # Use key directly for display
         stdscr.addstr(line_y + i, 2, display_str[:w-3])
 
     # Status Message
+    status_line_y = h - 4 # Ligne pour le statut (au-dessus de l'erreur et de l'aide)
+    if error_msg_line_explicit: status_line_y = h -5 # Ajuster si ligne d'erreur dédiée
+    
+    # Error Message (if any, displayed separately)
+    # Note: error_msg logic needs to be handled in _automatic_mode_loop to use a specific line
+    # For now, status_message can contain errors.
+
     if status_message:
-        stdscr.addstr(h - 3, 1, status_message[:w-2], curses.A_REVERSE if "Erreur" in status_message else curses.A_NORMAL)
+        # Si le message de statut est une erreur, l'afficher sur une ligne dédiée (h-4)
+        # Sinon, l'afficher sur (h-3)
+        is_error = "erreur" in status_message.lower() or "impossible" in status_message.lower()
+        msg_y = h - 4 if is_error else h - 3
+        stdscr.move(msg_y,1); stdscr.clrtoeol() # Clear previous message on that line
+        stdscr.addstr(msg_y, 1, status_message[:w-2], curses.A_REVERSE if is_error else curses.A_NORMAL)
     
     # Help Message
+    stdscr.move(h-2,1); stdscr.clrtoeol() # Clear previous help message
     if help_message:
          stdscr.addstr(h - 2, 1, help_message[:w-2])
-    else:
+    else: # Default help message
         stdscr.addstr(h - 2, 1, "ESC pour retourner au menu principal."[:w-2])
 
     stdscr.refresh()
+error_msg_line_explicit = False # Global or part of a class state if we need more complex error display
 
 def _automatic_mode_loop(stdscr):
     """Main loop for the Automatic Mode UI and logic."""
-    curses.curs_set(1) # Show cursor for input
-    stdscr.keypad(True) # Enable keypad for ESC, etc.
+    global XLIM_MM, YLIM_MM # Access global machine limits
+
+    curses.curs_set(1) 
+    stdscr.keypad(True) 
     
     project_name = ""
     project_path = ""
-    num_positions = None
+    num_x_points = None # NOUVEAU
+    num_y_points = None # NOUVEAU
     images_per_position = None
+    calculated_positions = [] # NOUVEAU
     
-    # State machine for input stages
-    # STAGES: GET_PROJECT_NAME, GET_NUM_POSITIONS, GET_IMAGES_PER_POS, CONFIRM, RUNNING, DONE
     current_stage_idx = 0
-    stages = ["GET_PROJECT_NAME", "GET_NUM_POSITIONS", "GET_IMAGES_PER_POS", "CONFIRM_SETUP"] # Add more later
+    # ÉTAPES MISES À JOUR
+    stages = ["GET_PROJECT_NAME", "GET_NUM_X", "GET_NUM_Y", 
+              "GET_IMAGES_PER_POS", "CONFIRM_PARAMETERS", 
+              "CALCULATE_POSITIONS", "READY_TO_EXECUTE"]
 
-    # Store entered values
-    config_values = {}
+    config_values = {} # Stores all collected parameters
     status_msg = "Initialisation du mode automatique..."
-    error_msg = ""
+    help_text_current = "Entrez les informations. ESC pour annuler."
 
     while True:
         current_stage = stages[current_stage_idx]
         
-        prompts_display = [
-            "Nom du Projet", 
-            "Chemin du Projet",
-            "Nombre de Positions",
-            "Images par Position"
+        # Clés pour l'affichage et la récupération des valeurs
+        # Doit correspondre aux chaînes utilisées dans ui_values et config_values
+        prompt_keys_ordered = [
+            "Nom du Projet", "Chemin du Projet",
+            "Points en X (nx)", "Points en Y (ny)",
+            "Images par Position", "Total Positions"
         ]
+        
         ui_values = {
             "Nom du Projet": project_name if project_name else "...",
             "Chemin du Projet": project_path if project_path else "...",
-            "Nombre de Positions": str(num_positions) if num_positions is not None else "...",
-            "Images par Position": str(images_per_position) if images_per_position is not None else "..."
+            "Points en X (nx)": str(num_x_points) if num_x_points is not None else "...",
+            "Points en Y (ny)": str(num_y_points) if num_y_points is not None else "...",
+            "Images par Position": str(images_per_position) if images_per_position is not None else "...",
+            "Total Positions": str(num_x_points * num_y_points) if num_x_points is not None and num_y_points is not None else "..."
         }
 
-        draw_automatic_mode_ui(stdscr, "-- Mode Automatique --", prompts_display, ui_values, status_msg, 
-                               "Entrez les informations. ESC pour annuler l'entrée actuelle ou quitter.")
+        # Gérer l'affichage du message d'erreur sur une ligne dédiée si nécessaire (h-4)
+        # Laisser draw_automatic_mode_ui gérer la position du status_msg en fonction de s'il contient "erreur"
+        draw_automatic_mode_ui(stdscr, "-- Mode Automatique --", prompt_keys_ordered, ui_values, status_msg, help_text_current)
         
-        # Clear previous error messages before new input
-        if error_msg:
-            h,w = stdscr.getmaxyx()
-            stdscr.move(h-4, 1); stdscr.clrtoeol() # Assuming error was line above status
-            error_msg = ""
-            stdscr.refresh()
-
-
-        input_y_offset = len(prompts_display) + 5 
+        input_y_offset = len(prompt_keys_ordered) + 5 # Position Y pour la saisie sous les prompts
 
         if current_stage == "GET_PROJECT_NAME":
-            status_msg = "Entrez le nom du projet."
-            draw_automatic_mode_ui(stdscr, "-- Mode Automatique --", prompts_display, ui_values, status_msg)
-            
+            help_text_current = "Entrez le nom du projet et validez avec Entrée. ESC pour annuler."
+            status_msg = "Configuration du projet..."
+            # Redessiner avec le nouveau message d'aide/statut avant de demander la saisie
+            draw_automatic_mode_ui(stdscr, "-- Mode Automatique --", prompt_keys_ordered, ui_values, status_msg, help_text_current)
+
             temp_name = _get_string_input_curses(stdscr, input_y_offset, 2, "Nom du Projet: ")
-            if temp_name is None: # ESC pressed in helper
-                status_msg = "Annulation... Retour au menu principal."
-                draw_automatic_mode_ui(stdscr, "-- Mode Automatique --", prompts_display, ui_values, status_msg)
-                time.sleep(0.5); break 
+            if temp_name is None: status_msg = "Annulation..."; time.sleep(0.5); break 
             if not temp_name:
-                status_msg = "Erreur: Le nom du projet ne peut pas être vide."
+                status_msg = "Erreur: Le nom du projet ne peut pas être vide. Réessayez."
                 continue
 
             project_name = temp_name
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            # Sanitize project_name for directory creation if needed (e.g., remove invalid chars)
-            # For simplicity, we assume a reasonable project name for now.
-            project_folder_name = f"{project_name}_{timestamp}"
-            # For now, create in current directory. Could be configurable.
-            project_path = os.path.join(".", project_folder_name) # Or a predefined base path
+            project_folder_name = f"{project_name.replace(' ', '_')}_{timestamp}" # Sanitize spaces
+            project_path = os.path.join(".", project_folder_name) 
             
             try:
                 os.makedirs(project_path, exist_ok=True)
@@ -838,64 +893,112 @@ def _automatic_mode_loop(stdscr):
                 config_values["project_path"] = project_path
                 current_stage_idx += 1
             except OSError as e:
-                status_msg = f"Erreur: Impossible de créer le dossier {project_path}: {e}"
-                project_name = "" # Reset on error
-                project_path = ""
-                # Stay in this stage
+                status_msg = f"Erreur création dossier {project_path}: {e}"
+                project_name = ""; project_path = ""; # Reset on error
 
-        elif current_stage == "GET_NUM_POSITIONS":
-            status_msg = "Entrez le nombre de positions différentes."
-            draw_automatic_mode_ui(stdscr, "-- Mode Automatique --", prompts_display, ui_values, status_msg)
+        elif current_stage == "GET_NUM_X":
+            help_text_current = "Entrez le nombre de points sur l'axe X (nx). ESC pour annuler."
+            status_msg = "Configuration de la grille de scan..."
+            draw_automatic_mode_ui(stdscr, "-- Mode Automatique --", prompt_keys_ordered, ui_values, status_msg, help_text_current)
 
-            temp_num_pos = _get_int_input_curses(stdscr, input_y_offset, 2, "Nombre de Positions (ex: 3): ", min_val=1)
-            if temp_num_pos is None: # ESC or invalid after prompt
-                 status_msg = "Annulation... Retour au menu principal."
-                 draw_automatic_mode_ui(stdscr, "-- Mode Automatique --", prompts_display, ui_values, status_msg)
-                 time.sleep(0.5); break
+            temp_nx = _get_int_input_curses(stdscr, input_y_offset, 2, "Points en X (nx) (ex: 5): ", min_val=1)
+            if temp_nx is None: status_msg = "Annulation..."; time.sleep(0.5); break
             
-            num_positions = temp_num_pos
-            config_values["num_positions"] = num_positions
+            num_x_points = temp_nx
+            config_values["num_x_points"] = num_x_points
             current_stage_idx += 1
             
-        elif current_stage == "GET_IMAGES_PER_POS":
-            status_msg = "Entrez le nombre d'images à capturer par position."
-            draw_automatic_mode_ui(stdscr, "-- Mode Automatique --", prompts_display, ui_values, status_msg)
+        elif current_stage == "GET_NUM_Y":
+            help_text_current = "Entrez le nombre de points sur l'axe Y (ny). ESC pour annuler."
+            status_msg = "Configuration de la grille de scan..."
+            draw_automatic_mode_ui(stdscr, "-- Mode Automatique --", prompt_keys_ordered, ui_values, status_msg, help_text_current)
 
-            temp_imgs_per_pos = _get_int_input_curses(stdscr, input_y_offset, 2, "Images par Position (ex: 1): ", min_val=1)
-            if temp_imgs_per_pos is None: # ESC or invalid
-                 status_msg = "Annulation... Retour au menu principal."
-                 draw_automatic_mode_ui(stdscr, "-- Mode Automatique --", prompts_display, ui_values, status_msg)
-                 time.sleep(0.5); break
+            temp_ny = _get_int_input_curses(stdscr, input_y_offset, 2, "Points en Y (ny) (ex: 4): ", min_val=1)
+            if temp_ny is None: status_msg = "Annulation..."; time.sleep(0.5); break
                  
-            images_per_position = temp_imgs_per_pos
+            num_y_points = temp_ny
+            config_values["num_y_points"] = num_y_points
+            current_stage_idx += 1
+
+        elif current_stage == "GET_IMAGES_PER_POS":
+            help_text_current = "Nombre d'images à capturer par position. ESC pour annuler."
+            status_msg = "Configuration de la capture..."
+            draw_automatic_mode_ui(stdscr, "-- Mode Automatique --", prompt_keys_ordered, ui_values, status_msg, help_text_current)
+
+            temp_imgs = _get_int_input_curses(stdscr, input_y_offset, 2, "Images par Position (ex: 1): ", min_val=1)
+            if temp_imgs is None: status_msg = "Annulation..."; time.sleep(0.5); break
+            
+            images_per_position = temp_imgs
             config_values["images_per_position"] = images_per_position
             current_stage_idx += 1
 
-        elif current_stage == "CONFIRM_SETUP":
-            status_msg = f"Configuration: {project_name}, {num_positions} positions, {images_per_position} img/pos. 'Entrée' pour continuer, 'ESC' pour annuler."
-            draw_automatic_mode_ui(stdscr, "-- Mode Automatique --", prompts_display, ui_values, status_msg,
-                                   "'Entrée' pour démarrer la définition des positions. 'ESC' pour retourner au menu.")
-            stdscr.nodelay(False) # Wait for key press
-            key = stdscr.getch()
-            if key == 27 or key == ord('q') or key == ord('Q'): # ESC or Q
-                status_msg = "Configuration annulée. Retour au menu."
-                draw_automatic_mode_ui(stdscr, "-- Mode Automatique --", prompts_display, ui_values, status_msg)
-                time.sleep(1); break
-            elif key == curses.KEY_ENTER or key in [10, 13]:
-                # Here we would move to the next phase: defining positions, then running.
-                # For now, just acknowledge and prepare to exit this simplified loop.
-                status_msg = "Configuration acceptée. (Prochaine étape: définition des positions - non implémenté)"
-                draw_automatic_mode_ui(stdscr, "-- Mode Automatique --", prompts_display, ui_values, status_msg)
-                time.sleep(2) 
-                # In a full implementation, you'd set current_stage_idx to the next logical step.
-                # For this request, we'll break and return to main menu.
-                break # End of current request fulfillment
+        elif current_stage == "CONFIRM_PARAMETERS":
+            total_pos_str = ui_values["Total Positions"]
+            status_msg = f"Vérifiez les paramètres ({total_pos_str} positions au total)."
+            help_text_current = "'Entrée' pour valider et calculer les positions. 'ESC' pour annuler."
+            draw_automatic_mode_ui(stdscr, "-- Mode Automatique --", prompt_keys_ordered, ui_values, status_msg, help_text_current)
             
+            stdscr.nodelay(False); key = stdscr.getch()
+            if key == 27: status_msg = "Annulation..."; time.sleep(0.5); break
+            elif key == curses.KEY_ENTER or key in [10, 13]:
+                status_msg = "Paramètres confirmés. Calcul des positions..."
+                current_stage_idx += 1 # Passer à CALCULATE_POSITIONS
+            # Ignorer les autres touches pour l'instant
+
+        elif current_stage == "CALCULATE_POSITIONS":
+            status_msg = "Calcul en cours..."
+            help_text_current = "Veuillez patienter."
+            draw_automatic_mode_ui(stdscr, "-- Mode Automatique --", prompt_keys_ordered, ui_values, status_msg, help_text_current)
+            time.sleep(0.1) # Permettre l'affichage du message
+
+            # Utiliser XLIM_MM et YLIM_MM globales qui sont les limites de la machine
+            calculated_positions, calc_msg = _calculate_scan_positions(
+                num_x_points, num_y_points, XLIM_MM, YLIM_MM, POINT_MARGIN_MM
+            )
+            status_msg = calc_msg # Afficher le message de succès ou d'erreur du calcul
+            if calculated_positions is None:
+                # Erreur lors du calcul, rester implicitement dans ce stage pour re-confirmer les params plus tard?
+                # Ou mieux, revenir à la configuration des points X/Y si erreur liée aux dimensions.
+                # Pour l'instant, message d'erreur et l'utilisateur devra ESC et recommencer.
+                help_text_current = "Erreur de calcul. Appuyez sur ESC et vérifiez les limites/points."
+                # On ne passe pas à l'étape suivante. L'utilisateur doit ESC.
+                # Pour permettre la correction, il faudrait revenir à GET_NUM_X par ex.
+                # Pour l'instant, affichage de l'erreur, l'utilisateur doit ESC.
+                draw_automatic_mode_ui(stdscr, "-- Mode Automatique --", prompt_keys_ordered, ui_values, status_msg, help_text_current)
+                stdscr.nodelay(False); key = stdscr.getch() # Attendre une touche
+                if key == 27: status_msg = "Annulation suite à erreur de calcul..."; time.sleep(0.5); break
+                # Boucle pour attendre ESC
+                while stdscr.getch() != 27: pass
+                status_msg = "Annulation suite à erreur de calcul..."; time.sleep(0.5); break
+
+            else:
+                config_values["calculated_positions"] = calculated_positions
+                status_msg = f"{len(calculated_positions)} positions calculées. Prêt à démarrer."
+                current_stage_idx += 1 # Passer à READY_TO_EXECUTE
+        
+        elif current_stage == "READY_TO_EXECUTE":
+            # status_msg est déjà "X positions calculées. Prêt à démarrer."
+            help_text_current = "'Entrée' pour lancer la séquence (NON IMPLEMENTE). 'ESC' pour menu."
+            # Afficher les positions calculées (par exemple les 5 premières) si souhaité
+            # pos_preview = ", ".join([f"({p[0]:.1f},{p[1]:.1f})" for p in calculated_positions[:3]]) + "..." if calculated_positions else "Aucune"
+            # status_msg_detail = f"{status_msg} Ex: {pos_preview}"
+            # draw_automatic_mode_ui(stdscr, "-- Mode Automatique --", prompt_keys_ordered, ui_values, status_msg_detail, help_text_current)
+
+            draw_automatic_mode_ui(stdscr, "-- Mode Automatique --", prompt_keys_ordered, ui_values, status_msg, help_text_current)
+            stdscr.nodelay(False); key = stdscr.getch()
+            if key == 27: status_msg = "Séquence annulée."; time.sleep(0.5); break
+            elif key == curses.KEY_ENTER or key in [10, 13]:
+                status_msg = "Démarrage de la séquence (simulation)... Terminé." # Placeholder
+                # ICI : Appeler la fonction qui exécute le scan (déplacements et captures)
+                # Par exemple: execute_automatic_scan(stdscr, config_values)
+                draw_automatic_mode_ui(stdscr, "-- Mode Automatique --", prompt_keys_ordered, ui_values, status_msg, "Appuyez sur une touche pour retourner au menu.")
+                stdscr.getch() # Attendre
+                break # Fin du mode auto pour l'instant
 
     # Cleanup before returning
     curses.curs_set(0)
-    stdscr.keypad(True) # Main menu expects keypad
-    return f"Mode Auto: {project_name}" if project_name else "Mode Auto quitté."
+    stdscr.keypad(True)
+    return f"Mode Auto: {project_name}" if project_name and calculated_positions else "Mode Auto quitté/annulé."
 
 
 # --- Main Menu Functions ---
