@@ -6,6 +6,24 @@ import curses # <-- Ajout pour l'interface CLI améliorée
 import cv2 # <-- Added for OpenCV webcam capture
 import os # <-- Added for path manipulation
 
+# --- Gestionnaire de contexte pour supprimer les messages stderr de bas niveau ---
+@contextmanager
+def suppress_c_stderr():
+    """
+    Un gestionnaire de contexte pour supprimer temporairement la sortie stderr au niveau C.
+    Utile pour cacher les avertissements des bibliothèques comme GStreamer via OpenCV.
+    """
+    original_stderr_fd = sys.stderr.fileno()
+    devnull_fd = os.open(os.devnull, os.O_WRONLY)
+    saved_stderr_fd = os.dup(original_stderr_fd)
+    try:
+        os.dup2(devnull_fd, original_stderr_fd)
+        yield
+    finally:
+        os.dup2(saved_stderr_fd, original_stderr_fd)
+        os.close(devnull_fd)
+        os.close(saved_stderr_fd)
+
 # GPIO Pin Configuration (BCM numbering) - As provided by user
 # Motor 1 (often Motor A in CoreXY nomenclature)
 PUL_PIN_M1 = 6
@@ -66,6 +84,8 @@ absolute_mode = True # True for ABS (absolute), False for REL (relative)
 
 # --- Curses UI state ---
 last_command_output = []
+
+
 
 def setup_gpio():
     """Initializes GPIO pins. Returns True on success, False on failure."""
@@ -327,69 +347,87 @@ def perform_calibration_cycle():
     output_messages.append("Mode set to ABS (Absolute).")
     return output_messages
 
-# --- NEW: Webcam Capture Function ---
 def capture_images(num_captures_requested, base_image_path):
     """
     Captures a specified number of images from the webcam.
     Saves images as base_image_path_0.jpg, base_image_path_1.jpg, etc.
     Assumes webcam is at index 0.
     Returns a list of output messages.
+    GStreamer warnings during camera initialization are suppressed.
     """
     messages = []
-    cap = cv2.VideoCapture(0) # 0 is usually the default webcam
+    cap = None  # Initialiser cap à None pour une gestion correcte dans le bloc finally
 
-    if not cap.isOpened():
+    # Tenter d'initialiser la caméra en supprimant les avertissements de console d'OpenCV/GStreamer
+    with suppress_c_stderr():
+        cap = cv2.VideoCapture(0)  # 0 est généralement la webcam par défaut
+
+    if cap is None or not cap.isOpened():
         messages.append("Error: Could not open webcam. Is it connected and not in use?")
+        # Si cap a été créé (même s'il n'est pas ouvert), il est bon de tenter un release.
+        # cap.release() sur un objet VideoCapture non ouvert est sûr et généralement silencieux.
+        if cap is not None:
+            with suppress_c_stderr(): # Au cas où release ferait aussi du bruit
+                cap.release()
         return messages
 
-    # Allow camera to initialize
-    time.sleep(0.5) 
+    # À partir d'ici, on suppose que cap n'est pas None et est ouvert.
+    try:
+        time.sleep(0.5)  # Permettre à la caméra de s'initialiser
+        actual_captures = 0
+        for i in range(num_captures_requested):
+            # Normalement, read() ne devrait pas générer les avertissements GStreamer spécifiques,
+            # mais si c'est le cas, cet appel pourrait aussi nécessiter d'être enveloppé.
+            ret, frame = cap.read()
+            if not ret:
+                messages.append(f"Error: Could not read frame {i+1}/{num_captures_requested}.")
+                if actual_captures == 0 and i == 0: # Échec total sur la première image
+                    # Pas besoin de cap.release() ici, le bloc finally s'en chargera
+                    return messages # Quitter si la première lecture échoue
+                break  # Arrêter si les images ne peuvent pas être lues
 
-    actual_captures = 0
-    for i in range(num_captures_requested):
-        ret, frame = cap.read()
-        if not ret:
-            messages.append(f"Error: Could not read frame {i+1}/{num_captures_requested}.")
-            if actual_captures == 0 and i == 0: # Total failure on first frame
-                cap.release()
-                return messages
-            break # Stop if frames can't be read
+            # Créer le répertoire s'il n'existe pas à partir de base_image_path
+            directory = os.path.dirname(base_image_path)
+            if directory and not os.path.exists(directory):
+                try:
+                    os.makedirs(directory, exist_ok=True)
+                    messages.append(f"  Created directory: {directory}")
+                except OSError as e:
+                    messages.append(f"  Error creating directory {directory}: {e}")
+                    # Pas besoin de cap.release() ici, le bloc finally s'en chargera
+                    return messages # Arrêter si on ne peut pas créer le répertoire
+            
+            # Construire le nom de fichier : ex : /chemin/vers/image_0.jpg
+            filename_base = os.path.basename(base_image_path)
+            image_filename = os.path.join(directory, f"{filename_base}_{i}.jpg")
 
-        # Create directory if it doesn't exist from the base_image_path
-        directory = os.path.dirname(base_image_path)
-        if directory and not os.path.exists(directory):
             try:
-                os.makedirs(directory, exist_ok=True)
-                messages.append(f"  Created directory: {directory}")
-            except OSError as e:
-                messages.append(f"  Error creating directory {directory}: {e}")
+                cv2.imwrite(image_filename, frame)
+                messages.append(f"  Image captured and saved: {image_filename}")
+                actual_captures += 1
+            except Exception as e:
+                messages.append(f"  Error saving image {image_filename}: {e}")
+                if actual_captures == 0 and i == 0 : # Échec de sauvegarde de la première image
+                     # Pas besoin de cap.release() ici, le bloc finally s'en chargera
+                     return messages
+                break 
+            
+            if i < num_captures_requested - 1:  # Petite pause entre les captures multiples
+                time.sleep(0.2)
+
+        if actual_captures > 0:
+            messages.append(f"--- Capture complete. {actual_captures} image(s) saved. ---")
+        # Si la caméra s'est ouverte mais aucune image n'a été sauvegardée (ex: read failed)
+        elif not (cap is None or not cap.isOpened()): # Vérifie que la caméra était initialement OK
+             messages.append(f"--- Capture failed. No images saved. ---")
+        
+    except Exception as e_inner: # Capturer d'autres erreurs inattendues durant la boucle
+        messages.append(f"An unexpected error occurred during capture/saving: {e_inner}")
+    finally:
+        if cap is not None:  # S'assurer que cap existe avant d'essayer de le libérer
+            with suppress_c_stderr(): # Supprimer aussi les avertissements de release, le cas échéant
                 cap.release()
-                return messages
-        
-        # Construct filename: e.g., /path/to/image_0.jpg
-        filename_base = os.path.basename(base_image_path)
-        image_filename = os.path.join(directory, f"{filename_base}_{i}.jpg")
-
-        try:
-            cv2.imwrite(image_filename, frame)
-            messages.append(f"  Image captured and saved: {image_filename}")
-            actual_captures += 1
-        except Exception as e:
-            messages.append(f"  Error saving image {image_filename}: {e}")
-            # Decide if we should stop or continue
-            if actual_captures == 0 and i == 0 : # Failed to save even the first image
-                 cap.release()
-                 return messages
-            break 
-        
-        if i < num_captures_requested - 1: # Small delay between captures if multiple
-            time.sleep(0.2) 
-
-    cap.release()
-    if actual_captures > 0:
-        messages.append(f"--- Capture complete. {actual_captures} image(s) saved. ---")
-    else:
-        messages.append(f"--- Capture failed. No images saved. ---")
+    
     return messages
 
 
