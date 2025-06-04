@@ -562,7 +562,7 @@ def _manual_mode_loop(stdscr):
     while running_manual_mode:
         x_lim_disp = f"{XLIM_MM:.0f}" if XLIM_MM!=float('inf') else "INF"; y_lim_disp = f"{YLIM_MM:.0f}" if YLIM_MM!=float('inf') else "INF"
         header = [
-            "--- CoreXY CLI Controller (Mode Manuel) ---",
+            "--- SIMUFLY : Mode Manuel ---",
             f"Max Speed: {MAX_SPEED_MM_S:.2f}, Cal Speed: {CALIBRATION_SPEED_MM_S}, Limits: X=[0,{x_lim_disp}], Y=[0,{y_lim_disp}]",
             f"Resolution: {MM_PER_MICROSTEP} mm/µstep ({MICROSTEPS_PER_MM} µsteps/mm)", "",
             "Cmds: MOVE X Y [S], ABS, REL, HOME, SETHOME, CAL, CAPTURE, S, LIMITS, POS, MENU/EXIT"
@@ -589,14 +589,117 @@ def _manual_mode_loop(stdscr):
 
 # --- Curses Input Helper Functions ---
 def _get_string_input_curses(stdscr, y, x, prompt_text, max_len=50):
-    """Gets a string input from the user in a curses window."""
+    """
+    Gets a string input from the user in a curses window.
+    Handles ESC for cancellation (returns None).
+    Handles Backspace/Delete for editing.
+    Handles Left/Right arrow keys for cursor movement within the input.
+    """
+    # curses.echo() # We are handling echo manually via addstr
+    curses.noecho() # Turn off automatic echo
+    stdscr.keypad(True) # Ensure special keys are captured
+
     stdscr.addstr(y, x, prompt_text)
     stdscr.clrtoeol() # Clear anything after the prompt
-    curses.echo()
+    
+    input_chars = [] # Store characters as a list for easier manipulation
+    cursor_display_pos = 0 # Visual cursor position relative to start of input field
+    
+    # Initial display of prompt
     stdscr.move(y, x + len(prompt_text))
-    input_bytes = stdscr.getstr(y, x + len(prompt_text), max_len)
-    curses.noecho()
-    return input_bytes.decode('utf-8').strip()
+    stdscr.refresh()
+
+    while True:
+        # Display current input string
+        current_input_str = "".join(input_chars)
+        stdscr.move(y, x + len(prompt_text)) # Move to start of input area
+        stdscr.clrtoeol() # Clear old input string
+        stdscr.addstr(y, x + len(prompt_text), current_input_str)
+        
+        # Place cursor at its current position within the displayed string
+        stdscr.move(y, x + len(prompt_text) + cursor_display_pos)
+        stdscr.refresh()
+
+        key = stdscr.getch()
+
+        if key == 27: # ESC key
+            # curses.echo() # Restore echo if it was on before, but we set noecho
+            return None # Signal cancellation
+        elif key == curses.KEY_ENTER or key == 10 or key == 13: # Enter key
+            # curses.echo()
+            return "".join(input_chars)
+        elif key == curses.KEY_BACKSPACE or key == 127 or key == 8: # Backspace
+            if cursor_display_pos > 0:
+                input_chars.pop(cursor_display_pos - 1)
+                cursor_display_pos -= 1
+        elif key == curses.KEY_DC: # Delete key
+            if cursor_display_pos < len(input_chars):
+                input_chars.pop(cursor_display_pos)
+        elif key == curses.KEY_LEFT:
+            if cursor_display_pos > 0:
+                cursor_display_pos -= 1
+        elif key == curses.KEY_RIGHT:
+            if cursor_display_pos < len(input_chars):
+                cursor_display_pos += 1
+        elif curses.ascii.isprint(key): # Printable characters
+            if len(input_chars) < max_len:
+                input_chars.insert(cursor_display_pos, chr(key))
+                cursor_display_pos += 1
+        # Ignore other special keys for simplicity
+
+def _get_int_input_curses(stdscr, y, x, prompt_text, min_val=None, max_val=None):
+    """Gets an integer input, validates, and returns it or None."""
+    # Ensures keypad is true for the string input part too
+    stdscr.keypad(True)
+    while True:
+        # _get_string_input_curses now handles ESC and can return None
+        input_str_obj = _get_string_input_curses(stdscr, y, x, prompt_text, 20) # Max 20 chars for an int
+
+        if input_str_obj is None: # ESC was pressed in _get_string_input_curses
+            return None
+
+        current_input_str = input_str_obj # It's a string if not None
+        
+        # Clear potential previous error message line (y+1)
+        stdscr.move(y + 1, x); stdscr.clrtoeol()
+
+        if not current_input_str: # User pressed Enter on empty string
+            stdscr.addstr(y + 1, x, "Veuillez entrer une valeur. Réessayez.")
+            stdscr.clrtoeol()
+            stdscr.refresh()
+            time.sleep(1) # Show message briefly
+            stdscr.move(y + 1, x); stdscr.clrtoeol() # Clear message
+            continue # Retry getting string input
+
+        try:
+            val = int(current_input_str)
+            valid_range = True
+            if min_val is not None and val < min_val: valid_range = False
+            if max_val is not None and val > max_val: valid_range = False
+            
+            if not valid_range:
+                range_err_msg = ""
+                if min_val is not None and max_val is not None:
+                    range_err_msg = f" (Doit être entre {min_val} et {max_val})"
+                elif min_val is not None:
+                    range_err_msg = f" (Doit être >= {min_val})"
+                elif max_val is not None:
+                    range_err_msg = f" (Doit être <= {max_val})"
+                
+                stdscr.addstr(y + 1, x, f"Valeur invalide{range_err_msg}. Réessayez.")
+                stdscr.clrtoeol()
+                stdscr.refresh()
+                time.sleep(1.5) # Show error for a bit
+                stdscr.move(y + 1, x); stdscr.clrtoeol() # Clear error
+                continue # Retry input
+            return val
+        except ValueError:
+            stdscr.addstr(y + 1, x, "Entrée numérique invalide. Réessayez.")
+            stdscr.clrtoeol()
+            stdscr.refresh()
+            time.sleep(1.5) # Show error for a bit
+            stdscr.move(y + 1, x); stdscr.clrtoeol() # Clear error
+            continue # Retry input
 
 def _get_int_input_curses(stdscr, y, x, prompt_text, min_val=None, max_val=None):
     """Gets an integer input, validates, and returns it or None."""
