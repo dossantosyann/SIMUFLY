@@ -57,8 +57,8 @@ if MM_PER_MICROSTEP == 0:
     raise ValueError("MM_PER_MICROSTEP cannot be zero.")
 MICROSTEPS_PER_MM = 1.0 / MM_PER_MICROSTEP
 
-DEFAULT_XLIM_MM = 800.0
-DEFAULT_YLIM_MM = 1200.0
+DEFAULT_XLIM_MM = 850.0
+DEFAULT_YLIM_MM = 1150.0
 XLIM_MM = DEFAULT_XLIM_MM
 YLIM_MM = DEFAULT_YLIM_MM
 
@@ -874,9 +874,6 @@ if __name__ == "__main__":
         finally:
             print("Cleaning up GPIO before exit...") 
             cleanup_gpio() 
-            # It's good practice to also release camera if it was somehow left open,
-            # though capture_images should handle its own release.
-            # For robustness, you could add a global camera object and try to release it here if it exists.
             print("Program terminated.") 
     else:
         print("GPIO setup failed. Program will not start controller interface.")
