@@ -311,15 +311,9 @@ def perform_calibration_cycle():
 
     current_x_mm = 0.0
     current_y_mm = 0.0
-    output_messages.append(f"Zéro machine physique défini comme (0,0) temporaire.")
 
-    offset_val = CALIBRATION_LOGICAL_ORIGIN_OFFSET_MM
-    output_messages.append(f"Déplacement de +{offset_val}mm en X et +{offset_val}mm pour établir le nouveau zéro logique...")
-    
+    offset_val = CALIBRATION_LOGICAL_ORIGIN_OFFSET_MM    
     motor_msgs_offset = move_corexy(offset_val, offset_val, actual_pulse_cycle_delay_cal)
-    if motor_msgs_offset: output_messages.extend(motor_msgs_offset)
-    
-    output_messages.append(f"Position physique atteinte: X={current_x_mm:.3f}, Y={current_y_mm:.3f} (par rapport au zéro machine).")
 
     current_x_mm = 0.0
     current_y_mm = 0.0
