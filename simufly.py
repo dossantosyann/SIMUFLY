@@ -340,7 +340,7 @@ def capture_images(num_captures_requested, base_image_path):
     return messages 
 
 def parse_command_and_execute(line):
-    global current_x_mm, current_y_mm, absolute_mode, TARGET_SPEED_MM_S, XLIM_MM, YLIM_MM 
+    global current_x_mm, current_y_mm, absolute_mode, TARGET_SPEED_MM_S, XLIM_MM, YLIM_MM
     output_messages = []
     command = line.strip().upper()
     parts_orig_case = line.strip().split()
@@ -356,7 +356,7 @@ def parse_command_and_execute(line):
         output_messages.append("  Calibration initiated..."); cal_messages = perform_calibration_cycle(); output_messages.extend(cal_messages)
     elif (instruction == "SET" and len(parts) > 1 and parts[1] == "HOME") or instruction == "SETHOME":
         output_messages.append("  Setting current position as HOME (0,0)...")
-        current_x_mm = 0.0; current_y_mm = 0.0; absolute_mode = True 
+        current_x_mm = 0.0; current_y_mm = 0.0; absolute_mode = True
         output_messages.append(f"  New logical origin. Current Pos: X={current_x_mm:.3f}, Y={current_y_mm:.3f}. Mode: ABS.")
     elif instruction == "HOME":
         output_messages.append("  Homing (to logical 0,0):")
@@ -368,7 +368,7 @@ def parse_command_and_execute(line):
         if home_path_length_mm > (MM_PER_MICROSTEP / 2.0) and absolute_mode:
             output_messages.append(f"    Moving to 0,0 from {current_x_mm:.2f},{current_y_mm:.2f} at {actual_homing_speed:.2f} mm/s")
             time_for_home_move_s = home_path_length_mm / actual_homing_speed
-            delta_x_steps_cartesian_home = round(-dx_home * MICROSTEPS_PER_MM) 
+            delta_x_steps_cartesian_home = round(-dx_home * MICROSTEPS_PER_MM)
             delta_y_steps_cartesian_home = round(dy_home * MICROSTEPS_PER_MM)
             steps_m1_home = delta_x_steps_cartesian_home + delta_y_steps_cartesian_home
             steps_m2_home = delta_x_steps_cartesian_home - delta_y_steps_cartesian_home
@@ -379,18 +379,18 @@ def parse_command_and_execute(line):
                 motor_msgs = move_corexy(dx_home, dy_home, actual_pulse_delay_for_home_move)
                 output_messages.extend(motor_msgs)
             else: current_x_mm = target_x_abs; current_y_mm = target_y_abs
-        else: 
+        else:
             current_x_mm = target_x_abs; current_y_mm = target_y_abs
             output_messages.append("    Already at logical 0,0." if absolute_mode else "    Logical pos reset to 0,0. No physical move in REL.")
         output_messages.append(f"  New position: X={current_x_mm:.3f}, Y={current_y_mm:.3f}")
-    elif instruction.startswith("S") and instruction != "MOVE": 
+    elif instruction.startswith("S") and instruction != "MOVE":
         try:
             speed_val_mm_s_req = 0.0
             if len(instruction) > 1 and instruction[1:].replace('.', '', 1).isdigit(): speed_val_mm_s_req = float(instruction[1:])
             elif len(parts) > 1 and parts[1].replace('.', '', 1).isdigit(): speed_val_mm_s_req = float(parts[1])
             else: output_messages.append(f"  Invalid S format."); return output_messages, True
             if speed_val_mm_s_req > 0:
-                if speed_val_mm_s_req > MAX_SPEED_MM_S: 
+                if speed_val_mm_s_req > MAX_SPEED_MM_S:
                     TARGET_SPEED_MM_S = MAX_SPEED_MM_S
                     output_messages.append(f"  Requested speed {speed_val_mm_s_req:.2f} > limit {MAX_SPEED_MM_S:.2f}. Speed set to MAX.")
                 else: TARGET_SPEED_MM_S = speed_val_mm_s_req; output_messages.append(f"  Global target speed set to: {TARGET_SPEED_MM_S:.2f} mm/s")
@@ -413,7 +413,7 @@ def parse_command_and_execute(line):
                 if num_img <= 0: output_messages.append("  Error: N must be positive.")
                 elif not image_base_path_str: output_messages.append("  Error: PATH cannot be empty.")
                 else:
-                    output_messages.append(f"  Capturing {num_img} image(s) to '{image_base_path_str}'..."); 
+                    output_messages.append(f"  Capturing {num_img} image(s) to '{image_base_path_str}'...");
                     capture_msgs = capture_images(num_img, image_base_path_str); output_messages.extend(capture_msgs)
             except ValueError: output_messages.append(f"  Error: Invalid N '{parts_orig_case[1]}'. Must be integer.")
             except Exception as e: output_messages.append(f"  Capture error: {e}")
@@ -421,14 +421,28 @@ def parse_command_and_execute(line):
     elif instruction == "MOVE" :
         target_x_cmd, target_y_cmd, s_value_this_cmd_req = None, None, None
         for part in parts[1:]:
-            if part.startswith('X'): try: target_x_cmd = float(part[1:])
-            except ValueError: output_messages.append(f"  Invalid X: {part}"); return output_messages, True
-            elif part.startswith('Y'): try: target_y_cmd = float(part[1:])
-            except ValueError: output_messages.append(f"  Invalid Y: {part}"); return output_messages, True
-            elif part.startswith('S'): try: s_value_this_cmd_req = float(part[1:])
-            except ValueError: output_messages.append(f"  Invalid S in MOVE: {part}")
+            # --- CORRECTED SECTION START ---
+            if part.startswith('X'):
+                try:
+                    target_x_cmd = float(part[1:])
+                except ValueError:
+                    output_messages.append(f"  Invalid X: {part}")
+                    return output_messages, True
+            elif part.startswith('Y'):
+                try:
+                    target_y_cmd = float(part[1:])
+                except ValueError:
+                    output_messages.append(f"  Invalid Y: {part}")
+                    return output_messages, True
+            elif part.startswith('S'):
+                try:
+                    s_value_this_cmd_req = float(part[1:])
+                except ValueError:
+                    output_messages.append(f"  Invalid S in MOVE: {part}")
+            # --- CORRECTED SECTION END ---
+
         if target_x_cmd is None and target_y_cmd is None: output_messages.append("  No X or Y for MOVE."); return output_messages, True
-        current_move_speed_mm_s = TARGET_SPEED_MM_S 
+        current_move_speed_mm_s = TARGET_SPEED_MM_S
         if s_value_this_cmd_req is not None:
             if s_value_this_cmd_req > 0:
                 if s_value_this_cmd_req > MAX_SPEED_MM_S: current_move_speed_mm_s = MAX_SPEED_MM_S; output_messages.append(f"  MOVE speed {s_value_this_cmd_req:.2f} > limit. Clamped to MAX: {current_move_speed_mm_s:.2f}.")
@@ -439,13 +453,13 @@ def parse_command_and_execute(line):
         if absolute_mode:
             if target_x_cmd is not None: final_target_x_mm = target_x_cmd
             if target_y_cmd is not None: final_target_y_mm = target_y_cmd
-        else: 
+        else:
             if target_x_cmd is not None: final_target_x_mm = current_x_mm + target_x_cmd
             if target_y_cmd is not None: final_target_y_mm = current_y_mm + target_y_cmd
         actual_target_x_mm = max(0.0, min(final_target_x_mm, XLIM_MM))
         actual_target_y_mm = max(0.0, min(final_target_y_mm, YLIM_MM))
         clamped = False
-        if XLIM_MM!=float('inf') or YLIM_MM!=float('inf'): 
+        if XLIM_MM!=float('inf') or YLIM_MM!=float('inf'):
             if abs(actual_target_x_mm-final_target_x_mm)>1e-9 or abs(actual_target_y_mm-final_target_y_mm)>1e-9 : clamped=True
         elif final_target_x_mm < 0 or final_target_y_mm < 0 : clamped=True
         if clamped: output_messages.append(f"  Warn: Target ({final_target_x_mm:.2f},{final_target_y_mm:.2f}) out of bounds. Clamped to ({actual_target_x_mm:.2f},{actual_target_y_mm:.2f}).")
@@ -455,11 +469,11 @@ def parse_command_and_execute(line):
             output_messages.append(f"  Move too small. Current:({current_x_mm:.3f},{current_y_mm:.3f}), Target:({actual_target_x_mm:.3f},{actual_target_y_mm:.3f})")
             current_x_mm,current_y_mm = round(actual_target_x_mm,3), round(actual_target_y_mm,3)
         else:
-            delta_x_steps_cartesian = round(-delta_x_to_move * MICROSTEPS_PER_MM) 
+            delta_x_steps_cartesian = round(-delta_x_to_move * MICROSTEPS_PER_MM)
             delta_y_steps_cartesian = round(delta_y_to_move * MICROSTEPS_PER_MM)
             steps_m1, steps_m2 = (delta_x_steps_cartesian + delta_y_steps_cartesian), (delta_x_steps_cartesian - delta_y_steps_cartesian)
             num_iterations = max(abs(int(steps_m1)), abs(int(steps_m2)))
-            if num_iterations == 0: 
+            if num_iterations == 0:
                 output_messages.append("  No motor steps for move."); current_x_mm,current_y_mm = round(actual_target_x_mm,3),round(actual_target_y_mm,3)
             else:
                 if current_move_speed_mm_s <= 1e-6: output_messages.append(f"  Speed {current_move_speed_mm_s:.2e} too low. No move.")
@@ -478,7 +492,7 @@ def parse_command_and_execute(line):
         output_messages.append(f"  Pos: X={current_x_mm:.3f}, Y={current_y_mm:.3f}. Speed: {TARGET_SPEED_MM_S:.2f} (Max: {MAX_SPEED_MM_S:.2f}). Mode: {'ABS' if absolute_mode else 'REL'}.")
         output_messages.append(f"  Limits: X=[0,{x_disp}], Y=[0,{y_disp}]. Endstops: X={'TRIG' if endstop_x.is_active else 'open'}, Y={'TRIG' if endstop_y.is_active else 'open'}")
     elif instruction in ["EXIT", "QUIT", "MENU"]:
-        output_messages.append("  Returning to main menu..."); return output_messages, False 
+        output_messages.append("  Returning to main menu..."); return output_messages, False
     else:
         if instruction: output_messages.append(f"  Unknown command: {instruction}")
     return output_messages, True
