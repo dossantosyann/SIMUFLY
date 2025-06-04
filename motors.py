@@ -14,8 +14,8 @@ PUL_PIN_M2 = 27
 DIR_PIN_M2 = 17
 
 # --- NEW: Endstop GPIO Pin Configuration ---
-ENDSTOP_PIN_X = 26 # For X-axis
-ENDSTOP_PIN_Y = 16 # For Y-axis
+ENDSTOP_PIN_X = 16 # For X-axis
+ENDSTOP_PIN_Y = 26 # For Y-axis
 
 # --- GPIOZero Device Objects (will be initialized in setup_gpio) ---
 pul_device_m1 = None
