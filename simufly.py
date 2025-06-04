@@ -802,50 +802,77 @@ def _execute_automatic_scan(stdscr, project_path, positions_list,
                             num_y_bands, num_x_images_per_band, imgs_per_pos_at_location,
                             base_ui_prompts, base_ui_values): # Pour référence de la hauteur de l'UI
     """
-    Exécute la séquence de scan automatique : déplacement et capture d'images.
+    Exécute la séquence de scan automatique : calibration, déplacement, capture, retour Home.
     """
     global current_x_mm, current_y_mm, TARGET_SPEED_MM_S, MM_PER_MICROSTEP, \
-           MICROSTEPS_PER_MM, MINIMUM_PULSE_CYCLE_DELAY
+           MICROSTEPS_PER_MM, MINIMUM_PULSE_CYCLE_DELAY, HOMING_SPEED_MM_S, MAX_SPEED_MM_S
+           # Ajout de HOMING_SPEED_MM_S et MAX_SPEED_MM_S
 
-    previous_cursor_visibility = curses.curs_set(0) # Cacher le curseur, sauvegarder l'état précédent
+    previous_cursor_visibility = curses.curs_set(0) 
 
     h, w = stdscr.getmaxyx()
-
-    # --- CORRECTION DU CALCUL DE LA LIGNE DE DÉBUT DU STATUT ---
-    # L'affichage des paramètres par draw_automatic_mode_ui se structure comme suit:
-    # Ligne 1: Titre de la page
-    # Ligne 2: Séparateur sous le titre
-    # Ligne 3: Vide (implicitement)
-    # Ligne 4 à (4 + len(base_ui_prompts) - 1): Les invites de paramètres
     last_prompt_line_idx = 4 + len(base_ui_prompts) - 1
-    status_start_line_y = last_prompt_line_idx + 2 # Laisse une ligne vide après les prompts
+    status_start_line_y = last_prompt_line_idx + 2 
 
-    # S'assurer que status_start_line_y est dans les limites de l'écran
-    if status_start_line_y >= h - 5: # Garder au moins 5 lignes pour le statut du scan
-        status_start_line_y = h - 5
-    if status_start_line_y < 0 : # Cas extrême d'écran très petit
+    if status_start_line_y >= h - 6: # Garder au moins 6 lignes pour le statut/calibration/home
+        status_start_line_y = h - 6
+    if status_start_line_y < 0 : 
         status_start_line_y = 0
-    # --- FIN CORRECTION ---
+    
+    def _clear_status_lines(start_line, num_lines):
+        for i in range(num_lines):
+            if start_line + i < h:
+                stdscr.move(start_line + i, 1); stdscr.clrtoeol()
+        stdscr.refresh()
 
-    # Effacer la zone de statut avant de commencer
-    for i in range(6): # Nombre de lignes à potentiellement utiliser pour le statut
-        if status_start_line_y + i < h: # Vérifier les limites
-            stdscr.move(status_start_line_y + i, 1)
-            stdscr.clrtoeol()
+    _clear_status_lines(status_start_line_y, 6) # Effacer la zone de statut
+
+    # --- 1. Calibration Initiale ---
+    stdscr.move(status_start_line_y, 1); stdscr.clrtoeol()
+    stdscr.addstr(status_start_line_y, 1, "Calibration initiale en cours..."[:w-2], curses.A_BOLD)
     stdscr.refresh()
+    
+    calibration_messages = perform_calibration_cycle() # Met à jour current_x_mm, current_y_mm
+    
+    # Afficher les messages de calibration (max 3 lignes sous le message "Calibration en cours")
+    for k_msg_idx, msg in enumerate(calibration_messages[:3]):
+        if status_start_line_y + 1 + k_msg_idx < h:
+            stdscr.move(status_start_line_y + 1 + k_msg_idx, 1); stdscr.clrtoeol()
+            stdscr.addstr(status_start_line_y + 1 + k_msg_idx, 3, msg[:w-4]) # Indenter un peu
+    stdscr.refresh()
+
+    calibration_failed = any("Error" in msg or "Erreur" in msg or "failed" in msg for msg in calibration_messages)
+    if calibration_failed:
+        final_scan_message = "Échec de la calibration initiale. Scan annulé."
+        # Afficher le message d'échec de calibration plus bas pour ne pas écraser les détails
+        error_line = status_start_line_y + 4 if status_start_line_y + 4 < h else h -1
+        stdscr.move(error_line, 1); stdscr.clrtoeol()
+        stdscr.addstr(error_line, 1, final_scan_message[:w-2], curses.A_REVERSE | curses.A_BOLD)
+        stdscr.refresh()
+        time.sleep(2.5) 
+        curses.curs_set(previous_cursor_visibility)
+        return final_scan_message
+    
+    # Afficher succès calibration avant de continuer (si pas d'erreur)
+    stdscr.move(status_start_line_y + 4 if status_start_line_y + 4 < h else h-1, 1); stdscr.clrtoeol() # Ligne pour message de succès calib
+    stdscr.addstr(status_start_line_y + 4 if status_start_line_y + 4 < h else h-1, 1, "Calibration terminée avec succès."[:w-2], curses.A_BOLD)
+    stdscr.refresh()
+    time.sleep(1.5) # Laisser le temps de lire
+    _clear_status_lines(status_start_line_y, 6) # Effacer les messages de calibration
+    # --- Fin Calibration Initiale ---
 
     global_image_num_for_prefix = 0
     scan_aborted = False
-    final_scan_message = "Scan non initié."
+    final_scan_message = "Scan non complété (raison inconnue)." # Message par défaut
 
     for pos_idx, target_pos_coords in enumerate(positions_list):
-        # Vérifier si l'on a encore de la place pour afficher les messages de statut
-        if status_start_line_y + 4 >= h : # Si pas assez de place pour tous les messages
-             # Afficher un message minimal et continuer, ou gérer l'erreur
+        _clear_status_lines(status_start_line_y, 5) # Effacer pour les nouveaux messages de cette position
+
+        if status_start_line_y + 4 >= h : 
              stdscr.move(h-1, 1); stdscr.clrtoeol()
              stdscr.addstr(h-1, 1, f"Scan {pos_idx+1}/{len(positions_list)}...", curses.A_REVERSE)
              stdscr.refresh()
-        else: # Affichage normal du statut
+        else: 
             target_x, target_y = target_pos_coords
             current_band_idx_for_naming = pos_idx // num_x_images_per_band
 
@@ -854,7 +881,6 @@ def _execute_automatic_scan(stdscr, project_path, positions_list,
             stdscr.addstr(status_start_line_y, 1, move_status_msg[:w-2])
             stdscr.refresh()
 
-            # --- Logique de Déplacement ---
             delta_x_to_move = target_x - current_x_mm
             delta_y_to_move = target_y - current_y_mm
             path_length_mm = math.sqrt(delta_x_to_move**2 + delta_y_to_move**2)
@@ -882,17 +908,14 @@ def _execute_automatic_scan(stdscr, project_path, positions_list,
             
             current_x_mm = round(target_x, 3)
             current_y_mm = round(target_y, 3)
-            # --- Fin Logique de Déplacement ---
 
             stdscr.move(status_start_line_y + 1, 1); stdscr.clrtoeol()
             capture_info_msg = f"  Capture de {imgs_per_pos_at_location} image(s) à (X:{current_x_mm:.1f}, Y:{current_y_mm:.1f})"
             stdscr.addstr(status_start_line_y + 1, 1, capture_info_msg[:w-2])
             stdscr.refresh()
 
-            # --- Logique de Capture ---
             filename_prefix = f"B{current_band_idx_for_naming:02d}_Im{global_image_num_for_prefix:02d}"
             base_path_for_this_capture = os.path.join(project_path, filename_prefix)
-            
             capture_output_msgs = capture_images(imgs_per_pos_at_location, base_path_for_this_capture)
             
             for k_msg_idx in range(min(2, len(capture_output_msgs))):
@@ -922,14 +945,53 @@ def _execute_automatic_scan(stdscr, project_path, positions_list,
                 final_scan_message = "Scan interrompu par l'utilisateur."
                 scan_aborted = True; break
     
-    if not scan_aborted:
-        final_scan_message = "Scan automatique terminé avec succès."
+    if not scan_aborted: # Si la boucle s'est terminée sans interruption ni erreur
+        final_scan_message = "Scan des positions terminé avec succès."
 
-    final_msg_line_y = status_start_line_y + 4 
-    if final_msg_line_y < h :
-        stdscr.move(final_msg_line_y, 1); stdscr.clrtoeol()
-        stdscr.addstr(final_msg_line_y, 1, final_scan_message[:w-2], curses.A_BOLD)
-    else: # Fallback si l'écran est trop petit pour la ligne de message final dédiée
+    _clear_status_lines(status_start_line_y, 6) # Effacer les messages du dernier point du scan
+
+    # --- 2. Retour au Point Home (0,0) ---
+    stdscr.move(status_start_line_y, 1); stdscr.clrtoeol()
+    stdscr.addstr(status_start_line_y, 1, "Retour au point HOME (0,0)..."[:w-2], curses.A_BOLD)
+    stdscr.refresh()
+
+    target_x_home, target_y_home = 0.0, 0.0
+    delta_x_to_home = target_x_home - current_x_mm
+    delta_y_to_home = target_y_home - current_y_mm
+    home_path_len = math.sqrt(delta_x_to_home**2 + delta_y_to_home**2)
+
+    if home_path_len >= (MM_PER_MICROSTEP / 2.0) :
+        homing_speed_actual = min(HOMING_SPEED_MM_S, MAX_SPEED_MM_S) 
+        if homing_speed_actual <= 1e-6:
+            stdscr.move(status_start_line_y + 1, 1); stdscr.clrtoeol()
+            stdscr.addstr(status_start_line_y + 1, 1, "Erreur: Vitesse de retour HOME trop faible."[:w-2])
+        else:
+            time_for_home_move = home_path_len / homing_speed_actual
+            _dx_steps_cart_h = round(-delta_x_to_home * MICROSTEPS_PER_MM)
+            _dy_steps_cart_h = round(delta_y_to_home * MICROSTEPS_PER_MM)
+            _steps_m1_h = _dx_steps_cart_h + _dy_steps_cart_h
+            _steps_m2_h = _dy_steps_cart_h - _dx_steps_cart_h # Correction ici pour CoreXY
+            num_iter_h = max(abs(int(_steps_m1_h)), abs(int(_steps_m2_h)))
+            if num_iter_h > 0:
+                pulse_delay_h = time_for_home_move / num_iter_h
+                actual_pulse_delay_h = max(MINIMUM_PULSE_CYCLE_DELAY, pulse_delay_h)
+                # On utilise move_corexy qui gère la mise à jour de current_x_mm et current_y_mm
+                move_corexy(delta_x_to_home, delta_y_to_home, actual_pulse_delay_h)
+    else: 
+        current_x_mm, current_y_mm = round(target_x_home,3), round(target_y_home,3)
+
+    stdscr.move(status_start_line_y + 1, 1); stdscr.clrtoeol()
+    stdscr.addstr(status_start_line_y + 1, 1, f"Retour HOME terminé. Pos: X={current_x_mm:.1f}, Y={current_y_mm:.1f}"[:w-2])
+    stdscr.refresh()
+    time.sleep(1.5) 
+    # --- Fin Retour Home ---
+    
+    # Afficher le message final global du scan (qui a été défini par la boucle ou calibration)
+    final_display_line = status_start_line_y + 3
+    if final_display_line < h:
+        stdscr.move(final_display_line, 1); stdscr.clrtoeol()
+        stdscr.addstr(final_display_line, 1, final_scan_message[:w-2], curses.A_BOLD)
+    else: # Fallback si écran trop petit
         stdscr.move(h-1,1); stdscr.clrtoeol()
         stdscr.addstr(h-1,1, final_scan_message[:w-2], curses.A_BOLD)
     stdscr.refresh()
