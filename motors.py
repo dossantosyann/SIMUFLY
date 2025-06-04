@@ -259,8 +259,8 @@ def move_corexy(delta_x_mm, delta_y_mm, pulse_cycle_delay_for_move):
 
 def perform_calibration_cycle():
     """
-    Performs a homing/calibration cycle for X and Y axes using endstops.
-    Moves towards negative X, then negative Y. Sets origin at trigger point, then backs off.
+    Performs a homing/calibration cycle for Y and X axes using endstops.
+    Moves towards negative Y, then negative X. Sets origin at trigger point, then backs off.
     Returns a list of output messages.
     """
     global current_x_mm, current_y_mm, TARGET_SPEED_MM_S, absolute_mode
@@ -280,48 +280,19 @@ def perform_calibration_cycle():
 
     max_steps_travel = int(MAX_CALIBRATION_TRAVEL_MM * MICROSTEPS_PER_MM)
 
-    # --- Calibrate X-axis (moving towards negative X) ---
-    output_messages.append(f"Calibrating X-axis at {cal_speed:.2f} mm/s...")
-    dir_device_m1.off() 
-    dir_device_m2.off() 
-    time.sleep(0.002)
-
-    homed_x = False
-    for i in range(max_steps_travel):
-        if endstop_x.is_active: 
-            output_messages.append("X-axis endstop triggered.")
-            homed_x = True
-            break
-        
-        pul_device_m1.on()
-        pul_device_m2.on()
-        time.sleep(MIN_PULSE_WIDTH)
-        pul_device_m1.off()
-        pul_device_m2.off()
-        
-        inter_pulse_delay = actual_pulse_cycle_delay_cal - MIN_PULSE_WIDTH
-        if inter_pulse_delay > 0:
-            time.sleep(inter_pulse_delay)
-        if i > 0 and i % 2000 == 0: time.sleep(0.001)
-
-
-    if not homed_x:
-        output_messages.append("Error: X-axis calibration failed (endstop not triggered). Stopping.")
-        return output_messages
-    
-    current_x_mm = 0.0 
-    output_messages.append(f"X-axis origin set at trigger point: {current_x_mm:.3f} mm.")
-
-    output_messages.append(f"Backing off X-axis by {CALIBRATION_BACKOFF_MM:.2f} mm...")
-    # Note: Back-off moves will also use the new trapezoidal profile if long enough
-    motor_msgs_bx = move_corexy(CALIBRATION_BACKOFF_MM, 0.0, actual_pulse_cycle_delay_cal)
-    if motor_msgs_bx: output_messages.extend(motor_msgs_bx)
-    output_messages.append(f"X-axis backed off. New position X={current_x_mm:.3f} mm.")
-
     # --- Calibrate Y-axis (moving towards negative Y) ---
     output_messages.append(f"Calibrating Y-axis at {cal_speed:.2f} mm/s...")
-    dir_device_m1.on()  
-    dir_device_m2.off() 
+    # For CoreXY, moving Y negative: M1 decreases (dir=ON), M2 increases (dir=OFF)
+    # In the original script's move_corexy, for delta_y_mm > 0 (positive Y):
+    #   delta_y_steps_cartesian = round(delta_y_mm * MICROSTEPS_PER_MM)
+    #   steps_m1 = delta_y_steps_cartesian  (positive) -> dir_device_m1.off()
+    #   steps_m2 = -delta_y_steps_cartesian (negative) -> dir_device_m2.on()
+    # So for negative Y (delta_y_mm < 0):
+    #   delta_y_steps_cartesian will be negative.
+    #   steps_m1 = delta_y_steps_cartesian (negative) -> dir_device_m1.on()
+    #   steps_m2 = -delta_y_steps_cartesian (positive) -> dir_device_m2.off()
+    dir_device_m1.on()  # Correct for negative Y movement
+    dir_device_m2.off() # Correct for negative Y movement
     time.sleep(0.002)
 
     homed_y = False
@@ -331,6 +302,7 @@ def perform_calibration_cycle():
             homed_y = True
             break
         
+        # Both motors step for Y movement in CoreXY
         pul_device_m1.on()
         pul_device_m2.on()
         time.sleep(MIN_PULSE_WIDTH)
@@ -340,7 +312,7 @@ def perform_calibration_cycle():
         inter_pulse_delay = actual_pulse_cycle_delay_cal - MIN_PULSE_WIDTH
         if inter_pulse_delay > 0:
             time.sleep(inter_pulse_delay)
-        if i > 0 and i % 2000 == 0: time.sleep(0.001)
+        if i > 0 and i % 2000 == 0: time.sleep(0.001) # Small pause to allow system to catch up if needed
 
     if not homed_y:
         output_messages.append("Error: Y-axis calibration failed (endstop not triggered). Stopping.")
@@ -350,9 +322,58 @@ def perform_calibration_cycle():
     output_messages.append(f"Y-axis origin set at trigger point: {current_y_mm:.3f} mm.")
 
     output_messages.append(f"Backing off Y-axis by {CALIBRATION_BACKOFF_MM:.2f} mm...")
-    motor_msgs_by = move_corexy(0.0, CALIBRATION_BACKOFF_MM, actual_pulse_cycle_delay_cal)
+    # move_corexy(delta_x, delta_y, ...)
+    motor_msgs_by = move_corexy(0.0, CALIBRATION_BACKOFF_MM, actual_pulse_cycle_delay_cal) # Positive Y backoff
     if motor_msgs_by: output_messages.extend(motor_msgs_by)
     output_messages.append(f"Y-axis backed off. New position Y={current_y_mm:.3f} mm.")
+
+
+    # --- Calibrate X-axis (moving towards negative X) ---
+    output_messages.append(f"Calibrating X-axis at {cal_speed:.2f} mm/s...")
+    # For CoreXY, moving X negative: M1 decreases (dir=ON), M2 decreases (dir=ON)
+    # In the original script's move_corexy, for delta_x_mm > 0 (positive X):
+    #   delta_x_steps_cartesian = round(-delta_x_mm * MICROSTEPS_PER_MM) (negative)
+    #   steps_m1 = delta_x_steps_cartesian (negative) -> dir_device_m1.on()
+    #   steps_m2 = delta_x_steps_cartesian (negative) -> dir_device_m2.on()
+    # So for negative X (delta_x_mm < 0):
+    #   delta_x_steps_cartesian will be positive.
+    #   steps_m1 = delta_x_steps_cartesian (positive) -> dir_device_m1.off()
+    #   steps_m2 = delta_x_steps_cartesian (positive) -> dir_device_m2.off()
+    dir_device_m1.off() # Correct for negative X movement
+    dir_device_m2.off() # Correct for negative X movement
+    time.sleep(0.002)
+
+    homed_x = False
+    for i in range(max_steps_travel):
+        if endstop_x.is_active: 
+            output_messages.append("X-axis endstop triggered.")
+            homed_x = True
+            break
+        
+        # Both motors step for X movement in CoreXY
+        pul_device_m1.on()
+        pul_device_m2.on()
+        time.sleep(MIN_PULSE_WIDTH)
+        pul_device_m1.off()
+        pul_device_m2.off()
+        
+        inter_pulse_delay = actual_pulse_cycle_delay_cal - MIN_PULSE_WIDTH
+        if inter_pulse_delay > 0:
+            time.sleep(inter_pulse_delay)
+        if i > 0 and i % 2000 == 0: time.sleep(0.001) # Small pause
+
+    if not homed_x:
+        output_messages.append("Error: X-axis calibration failed (endstop not triggered). Stopping.")
+        return output_messages
+    
+    current_x_mm = 0.0 
+    output_messages.append(f"X-axis origin set at trigger point: {current_x_mm:.3f} mm.")
+
+    output_messages.append(f"Backing off X-axis by {CALIBRATION_BACKOFF_MM:.2f} mm...")
+    # move_corexy(delta_x, delta_y, ...)
+    motor_msgs_bx = move_corexy(CALIBRATION_BACKOFF_MM, 0.0, actual_pulse_cycle_delay_cal) # Positive X backoff
+    if motor_msgs_bx: output_messages.extend(motor_msgs_bx)
+    output_messages.append(f"X-axis backed off. New position X={current_x_mm:.3f} mm.")
 
     output_messages.append(f"--- Calibration Cycle Complete ---")
     output_messages.append(f"Final position after back-off: X={current_x_mm:.3f}, Y={current_y_mm:.3f} mm")
