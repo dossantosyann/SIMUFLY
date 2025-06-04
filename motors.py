@@ -5,6 +5,7 @@ import re # For command parsing
 import curses # <-- Ajout pour l'interface CLI améliorée
 import cv2 # <-- Added for OpenCV webcam capture
 import os # <-- Added for path manipulation
+from contextlib import contextmanager
 
 # --- Gestionnaire de contexte pour supprimer les messages stderr de bas niveau ---
 @contextmanager
