@@ -690,7 +690,7 @@ def _curses_main_loop(stdscr):
 
     # Initial last_command_output if empty
     if not last_command_output:
-        last_command_output.append("CLI Ready. Enter 'HELP' for commands (not yet implemented) or 'EXIT'.")
+        last_command_output.append("CLI Ready. Enter command or 'EXIT'.") # Simplified initial message
 
 
     while running:
@@ -699,11 +699,12 @@ def _curses_main_loop(stdscr):
 
         header = [
             "--- CoreXY CLI Controller (Custom Commands) ---",
+            "IMPORTANT: Press Ctrl+X for an IMMEDIATE MOTOR STOP.", # Added prominent line
             f"Max Settable Speed: {MAX_SPEED_MM_S:.2f} mm/s",
             f"Calibration Speed: {CALIBRATION_SPEED_MM_S} mm/s",
             f"Effective Limits: X=[0, {x_limit_display_str}], Y=[0, {y_limit_display_str}] mm",
             f"Resolution: {MM_PER_MICROSTEP} mm/microstep ({MICROSTEPS_PER_MM} microsteps/mm)",
-            "Ctrl+X for HARD STOP. Type 'RESET_STOP' to clear.",
+            "Ctrl+X also usable mid-command. Type 'RESET_STOP' to clear stop.", # Clarification
             "Available commands:",
             "  MOVE X<v> Y<v> [S<v>]  |  ABS, REL  |  HOME  |  CALIBRATE / CAL",
             "  S<v> or S <v>          |  LIMITS [ON|OFF]  |  POS  |  RESET_STOP",
@@ -765,9 +766,10 @@ def _curses_main_loop(stdscr):
             # This might happen on resize if not handled, or other curses issues
             last_command_output.insert(0, f"Curses error: {e}. Try 'EXIT'.")
             # Potentially try to re-init curses screen or exit gracefully
-        except KeyboardInterrupt:
-            last_command_output.insert(0, "Keyboard interrupt. Exiting...")
-            running = False
+        except KeyboardInterrupt: # Typically Ctrl+C
+            hard_stop_requested = True # Treat Ctrl+C also as a hard stop trigger
+            last_command_output.insert(0, "Keyboard interrupt (Ctrl+C). HARD STOP ACTIVATED. Exiting...")
+            running = False # And exit
         except Exception as e:
             last_command_output.insert(0, f"Unexpected error: {e}")
             # Consider adding more detailed traceback for debugging if needed
@@ -776,13 +778,14 @@ def _curses_main_loop(stdscr):
     # Final screen update before exiting curses
     curses.curs_set(0) # Hide cursor
     final_message = "Exiting program..."
-    if last_command_output and last_command_output[0] != final_message:
+    if not last_command_output or (last_command_output and last_command_output[0] != final_message and "Exiting" not in last_command_output[0]):
          last_command_output.insert(0, final_message)
     
     # Simplified final draw
     stdscr.clear()
     for i, line in enumerate(last_command_output[:stdscr.getmaxyx()[0]-1]): # Show as much as fits
-        stdscr.addstr(i, 0, str(line)[:stdscr.getmaxyx()[1]-1])
+        if i < stdscr.getmaxyx()[0] -1 and 0 <= i : # check bounds
+            stdscr.addstr(i, 0, str(line)[:stdscr.getmaxyx()[1]-1])
     stdscr.refresh()
     time.sleep(1)
 
