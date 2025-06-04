@@ -294,54 +294,69 @@ def perform_calibration_cycle():
     absolute_mode = True; output_messages.append("Mode set to ABS.")
     return output_messages
 
-def capture_images(num_captures_requested, base_image_path):
+def capture_images(num_captures_requested, base_image_path_with_prefix): # Renamed arg for clarity
+    """
+    Captures a specified number of images from the webcam.
+    Saves images as base_image_path_with_prefix_Id00.tiff, _Id01.tiff, etc.
+    """
     messages = []
     cap = None
     with suppress_c_stderr(): cap = cv2.VideoCapture(0)
     if cap is None or not cap.isOpened(): 
-        messages.append("Error: Could not open webcam."); 
+        messages.append("Erreur: Impossible d'ouvrir la webcam.")
         if cap is not None: 
             with suppress_c_stderr(): cap.release()
         return messages 
     try:
-        target_width, target_height = 3840, 2160
-        messages.append(f"  Attempting to set resolution to {target_width}x{target_height}...")
+        target_width, target_height = 3840, 2160 # Tentative de résolution 4K
+        # ... (logique de réglage de la résolution, identique à avant) ...
         set_w_ok = cap.set(cv2.CAP_PROP_FRAME_WIDTH, target_width)
         set_h_ok = cap.set(cv2.CAP_PROP_FRAME_HEIGHT, target_height)
         actual_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         actual_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
         if set_w_ok and set_h_ok and actual_width == target_width and actual_height == target_height:
-            messages.append(f"  Successfully set resolution to {actual_width}x{actual_height}.")
+            messages.append(f"  Résolution réglée sur {actual_width}x{actual_height}.")
         else:
-            messages.append(f"  Warning: Could not set exact resolution. Actual: {actual_width}x{actual_height}.")
-        time.sleep(0.5)
+            messages.append(f"  Avertissement: Résolution actuelle: {actual_width}x{actual_height}.")
+        
+        time.sleep(0.5) # Laisser la caméra s'initialiser
         actual_captures = 0 
         for i in range(num_captures_requested): 
             ret, frame = cap.read() 
             if not ret: 
-                messages.append(f"Error: Could not read frame {i+1}/{num_captures_requested}.")
+                messages.append(f"Erreur: Lecture frame {i+1}/{num_captures_requested} impossible.")
                 if actual_captures == 0 and i == 0: return messages 
                 break 
-            directory = os.path.dirname(base_image_path) 
-            if directory and not os.path.exists(directory): 
-                try: os.makedirs(directory, exist_ok=True); messages.append(f"  Created directory: {directory}") 
-                except OSError as e: messages.append(f"  Error creating directory {directory}: {e}"); return messages 
-            filename_base = os.path.basename(base_image_path) 
-            image_filename = os.path.join(directory, f"{filename_base}_{i}.jpg") 
+            
+            # base_image_path_with_prefix contient déjà le chemin du dossier et le préfixe BXX_ImXX
+            directory = os.path.dirname(base_image_path_with_prefix)
+            filename_prefix_only = os.path.basename(base_image_path_with_prefix) # Ex: B00_Im00
+
+            # --- MODIFICATION NOMENCLATURE ---
+            image_filename = os.path.join(directory, f"{filename_prefix_only}_Id{i:02d}.tiff") 
+            
             try:
-                cv2.imwrite(image_filename, frame); messages.append(f"  Image captured: {image_filename}"); actual_captures += 1 
+                # S'assurer que le dossier existe (normalement créé par _automatic_mode_loop)
+                if directory and not os.path.exists(directory):
+                    os.makedirs(directory, exist_ok=True)
+                    messages.append(f"  Création dossier (sécurité): {directory}")
+
+                cv2.imwrite(image_filename, frame)
+                messages.append(f"  Image capturée: {os.path.basename(image_filename)}") # Afficher juste le nom du fichier
+                actual_captures += 1 
             except Exception as e:
-                messages.append(f"  Error saving image {image_filename}: {e}") 
+                messages.append(f"  Erreur sauvegarde image {os.path.basename(image_filename)}: {e}") 
                 if actual_captures == 0 and i == 0 : return messages 
                 break 
             if i < num_captures_requested - 1: time.sleep(0.2) 
-        if actual_captures > 0: messages.append(f"--- Capture complete. {actual_captures} image(s) saved. ---") 
-        elif not (cap is None or not cap.isOpened()): messages.append(f"--- Capture failed. No images saved. ---") 
-    except Exception as e_inner: messages.append(f"An unexpected error during capture: {e_inner}") 
+        
+        if actual_captures > 0: messages.append(f"--- Capture Position: {actual_captures} image(s) TIFF sauvegardée(s). ---") 
+        elif not (cap is None or not cap.isOpened()): messages.append(f"--- Capture Position: Échec, aucune image sauvegardée. ---") 
+    except Exception as e_inner: messages.append(f"Erreur inattendue pendant capture: {e_inner}") 
     finally:
         if cap is not None: 
             with suppress_c_stderr(): cap.release() 
-    return messages 
+    return messages
 
 def parse_command_and_execute(line):
     global current_x_mm, current_y_mm, absolute_mode, TARGET_SPEED_MM_S, XLIM_MM, YLIM_MM
@@ -783,6 +798,125 @@ def _calculate_scan_positions(nx, ny, current_xlim_mm, current_ylim_mm, point_ma
             
     return positions, f"{len(positions)} positions calculées avec succès."
 
+def _execute_automatic_scan(stdscr, project_path, positions_list, 
+                            num_y_bands, num_x_images_per_band, imgs_per_pos_at_location,
+                            base_ui_prompts, base_ui_values): # Pour réafficher l'UI de base
+    """
+    Exécute la séquence de scan automatique : déplacement et capture d'images.
+    """
+    global current_x_mm, current_y_mm, TARGET_SPEED_MM_S, MM_PER_MICROSTEP, \
+           MICROSTEPS_PER_MM, MINIMUM_PULSE_CYCLE_DELAY # Accès aux variables globales pour le mouvement
+
+    original_curs_set = curses.curs_get() # Sauvegarder l'état du curseur
+    curses.curs_set(0) # Cacher le curseur pendant le scan
+
+    # Définir une zone pour les messages de statut du scan
+    h, w = stdscr.getmaxyx()
+    status_start_line_y = len(base_ui_prompts) + 7 # Sous les paramètres et la saisie
+    
+    # Effacer la zone de statut potentiel avant de commencer
+    for i in range(5): # Effacer 5 lignes par exemple
+        if status_start_line_y + i < h:
+            stdscr.move(status_start_line_y + i, 1); stdscr.clrtoeol()
+
+    global_image_num_for_prefix = 0 # Pour le ImXX dans BXX_ImXX_IdXX.tiff
+
+    scan_aborted = False
+    final_scan_message = "Scan non initié."
+
+    for pos_idx, target_pos_coords in enumerate(positions_list):
+        target_x, target_y = target_pos_coords
+
+        # Recalculer le numéro de bande (iy) pour le nommage BXX
+        # num_x_images_per_band est nx (nombre d'images par bande)
+        current_band_idx_for_naming = pos_idx // num_x_images_per_band # Bande (0-indexed)
+
+        # Afficher le statut actuel
+        stdscr.move(status_start_line_y, 1); stdscr.clrtoeol()
+        move_status_msg = f"Scan {pos_idx+1}/{len(positions_list)}: Bande {current_band_idx_for_naming+1}, Pos ({target_x:.1f}, {target_y:.1f})"
+        stdscr.addstr(status_start_line_y, 1, move_status_msg[:w-2])
+        stdscr.refresh()
+
+        # --- Logique de Déplacement ---
+        delta_x_to_move = target_x - current_x_mm
+        delta_y_to_move = target_y - current_y_mm
+        path_length_mm = math.sqrt(delta_x_to_move**2 + delta_y_to_move**2)
+
+        if path_length_mm >= (MM_PER_MICROSTEP / 2.0):
+            current_move_speed = TARGET_SPEED_MM_S
+            if current_move_speed <= 1e-6:
+                final_scan_message = "Erreur: Vitesse de déplacement trop faible. Scan annulé."
+                scan_aborted = True; break
+            
+            time_for_move_s = path_length_mm / current_move_speed
+            
+            # Calcul des steps (comme dans move_corexy mais sans la mise à jour globale immédiate)
+            _dx_steps_cart = round(-delta_x_to_move * MICROSTEPS_PER_MM)
+            _dy_steps_cart = round(delta_y_to_move * MICROSTEPS_PER_MM)
+            _steps_m1 = _dx_steps_cart + _dy_steps_cart
+            _steps_m2 = _dx_steps_cart - _dy_steps_cart
+            num_iterations = max(abs(int(_steps_m1)), abs(int(_steps_m2)))
+
+            if num_iterations > 0:
+                pulse_delay = time_for_move_s / num_iterations
+                actual_pulse_delay = max(MINIMUM_PULSE_CYCLE_DELAY, pulse_delay)
+                # Appel direct à move_motors_coordinated pour ne pas double-mettre à jour current_x/y_mm avant la fin
+                move_motors_coordinated(int(_steps_m1), int(_steps_m2), actual_pulse_delay)
+        
+        current_x_mm = round(target_x, 3) # Mettre à jour la position après le mouvement effectif
+        current_y_mm = round(target_y, 3)
+        # --- Fin Logique de Déplacement ---
+
+        # Afficher le statut de capture
+        stdscr.move(status_start_line_y + 1, 1); stdscr.clrtoeol()
+        capture_info_msg = f"  Capture de {imgs_per_pos_at_location} image(s) à (X:{current_x_mm:.1f}, Y:{current_y_mm:.1f})"
+        stdscr.addstr(status_start_line_y + 1, 1, capture_info_msg[:w-2])
+        stdscr.refresh()
+
+        # --- Logique de Capture ---
+        # Préfixe: B<bande_idx>_Im<pos_idx_global>
+        # capture_images ajoutera _Id<capture_idx_locale>.tiff
+        filename_prefix = f"B{current_band_idx_for_naming:02d}_Im{global_image_num_for_prefix:02d}"
+        base_path_for_this_capture = os.path.join(project_path, filename_prefix)
+        
+        capture_output_msgs = capture_images(imgs_per_pos_at_location, base_path_for_this_capture)
+        
+        # Afficher les messages de capture (max 2 lignes)
+        for k in range(2): # Afficher jusqu'à 2 messages de capture
+            if status_start_line_y + 2 + k < h:
+                stdscr.move(status_start_line_y + 2 + k, 1); stdscr.clrtoeol()
+                if k < len(capture_output_msgs):
+                    stdscr.addstr(status_start_line_y + 2 + k, 3, capture_output_msgs[k][:w-4])
+        stdscr.refresh()
+
+        # Vérifier si une erreur critique de capture s'est produite
+        if any("Erreur" in msg for msg in capture_output_msgs if "Résolution" not in msg and "directory" not in msg): # Ignorer les avertissements de résolution ou création de dossier
+            final_scan_message = "Erreur critique de capture. Scan interrompu."
+            scan_aborted = True; break
+        
+        global_image_num_for_prefix += 1 # Incrémenter pour le prochain point de la grille
+
+        time.sleep(0.1) # Petite pause optionnelle
+
+        # Vérifier l'interruption utilisateur (ESC)
+        stdscr.nodelay(True)
+        key_press = stdscr.getch()
+        stdscr.nodelay(False)
+        if key_press == 27: # ESC
+            final_scan_message = "Scan interrompu par l'utilisateur."
+            scan_aborted = True; break
+    
+    if not scan_aborted:
+        final_scan_message = "Scan automatique terminé avec succès."
+
+    # Afficher le message final du scan
+    if status_start_line_y + 4 < h: # Assurer qu'il y a de la place
+        stdscr.move(status_start_line_y + 4, 1); stdscr.clrtoeol()
+        stdscr.addstr(status_start_line_y + 4, 1, final_scan_message[:w-2], curses.A_BOLD)
+    stdscr.refresh()
+    
+    curses.curs_set(original_curs_set) # Restaurer le curseur
+    return final_scan_message
 
 def draw_automatic_mode_ui(stdscr, title, prompts, current_values, status_message="", help_message=""):
     """Draws the UI for the automatic mode."""
@@ -988,18 +1122,42 @@ def _automatic_mode_loop(stdscr):
                 status_msg = calc_msg + csv_feedback_msg # Concaténer les messages
                 current_stage_idx += 1 # Passer à READY_TO_EXECUTE
         
+        # ... (dans _automatic_mode_loop)
         elif current_stage == "READY_TO_EXECUTE":
-            help_text_current = "'Entrée' pour lancer la séquence (NON IMPLEMENTE). 'ESC' pour menu."
+            help_text_current = "'Entrée' pour lancer la séquence. 'ESC' pour retourner au menu."
+            # status_msg contient déjà le résultat du calcul et du CSV
             draw_automatic_mode_ui(stdscr, "-- Mode Automatique --", prompt_keys_ordered, ui_values, status_msg, help_text_current)
             
             stdscr.nodelay(False); key = stdscr.getch()
-            if key == 27: status_msg = "Séquence annulée."; time.sleep(0.5); break
+            if key == 27: 
+                status_msg = "Séquence annulée avant démarrage."; 
+                # Redessiner pour s'assurer que le message est vu avant la pause et la sortie
+                draw_automatic_mode_ui(stdscr, "-- Mode Automatique --", prompt_keys_ordered, ui_values, status_msg, "Retour au menu...")
+                time.sleep(1); 
+                break
             elif key == curses.KEY_ENTER or key in [10, 13]:
-                status_msg = "Démarrage de la séquence (simulation)... Terminé." 
-                # Ici, vous appelleriez la fonction qui exécute réellement le scan.
-                draw_automatic_mode_ui(stdscr, "-- Mode Automatique --", prompt_keys_ordered, ui_values, status_msg, "Appuyez sur une touche pour retourner au menu.")
+                status_msg = "Lancement de la séquence de scan..."
+                draw_automatic_mode_ui(stdscr, "-- Mode Automatique --", prompt_keys_ordered, ui_values, status_msg, "Scan en cours... ESC pour interrompre.")
+                time.sleep(0.5)
+
+                scan_result_msg = _execute_automatic_scan(
+                    stdscr, 
+                    project_path, 
+                    calculated_positions, # La liste des (x,y)
+                    num_y_points,         # Nombre de bandes (ny)
+                    num_x_points,         # Nombre d'images par bande (nx)
+                    images_per_position,  # Nombre de captures à chaque position (pour _IdXX)
+                    prompt_keys_ordered,  # Pour que _execute_automatic_scan puisse redessiner la base
+                    ui_values
+                )
+                
+                status_msg = scan_result_msg 
+                help_text_current = "Appuyez sur une touche pour retourner au menu."
+                # Redessiner l'interface avec le message final du scan
+                draw_automatic_mode_ui(stdscr, "-- Mode Automatique --", prompt_keys_ordered, ui_values, status_msg, help_text_current)
+                stdscr.nodelay(False)
                 stdscr.getch() 
-                break 
+                break # Fin du mode auto après le scan ou annulation
 
     curses.curs_set(0)
     stdscr.keypad(True)
