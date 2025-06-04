@@ -59,8 +59,8 @@ if MM_PER_MICROSTEP == 0:
     raise ValueError("MM_PER_MICROSTEP cannot be zero.")
 MICROSTEPS_PER_MM = 1.0 / MM_PER_MICROSTEP
 
-DEFAULT_XLIM_MM = 850.0
-DEFAULT_YLIM_MM = 1150.0
+DEFAULT_XLIM_MM = 825.0
+DEFAULT_YLIM_MM = 1125.0
 XLIM_MM = DEFAULT_XLIM_MM
 YLIM_MM = DEFAULT_YLIM_MM
 
@@ -318,7 +318,7 @@ def perform_calibration_cycle():
     current_x_mm = 0.0
     current_y_mm = 0.0
     absolute_mode = True 
-    output_messages.append(f"Nouveau point d'origine logique (0,0) défini à la position de décalage.")
+    output_messages.append(f"Origine définie.")
     output_messages.append(f"--- Calibration Terminée --- Position logique actuelle: X={current_x_mm:.3f}, Y={current_y_mm:.3f} mm")
     output_messages.append("Mode réglé sur ABS (Absolu).")
     
@@ -1220,9 +1220,11 @@ def _automatic_mode_loop(stdscr):
                     try:
                         with open(csv_file_path, 'w', newline='') as csvfile:
                             csv_writer = csv.writer(csvfile)
-                            csv_writer.writerow(['X_mm', 'Y_mm']) # En-têtes
+                            # MODIFICATION ICI: Ajouter 'n_img' à l'en-tête
+                            csv_writer.writerow(['X_mm', 'Y_mm', 'n_img']) # En-têtes
                             for pos_x, pos_y in calculated_positions:
-                                csv_writer.writerow([pos_x, pos_y])
+                                # MODIFICATION ICI: Ajouter images_per_position à chaque ligne
+                                csv_writer.writerow([pos_x, pos_y, images_per_position])
                         csv_feedback_msg = " position_list.csv sauvegardé."
                     except IOError as e:
                         csv_feedback_msg = f" Erreur sauvegarde CSV: {e}."
