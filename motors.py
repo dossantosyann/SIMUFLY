@@ -706,9 +706,15 @@ def _curses_main_loop(stdscr):
             f"Resolution: {MM_PER_MICROSTEP} mm/microstep ({MICROSTEPS_PER_MM} microsteps/mm)",
             "Ctrl+X also usable mid-command. Type 'RESET_STOP' to clear stop.", # Clarification
             "Available commands:",
-            "  MOVE X<v> Y<v> [S<v>]  |  ABS, REL  |  HOME  |  CALIBRATE / CAL",
-            "  S<v> or S <v>          |  LIMITS [ON|OFF]  |  POS  |  RESET_STOP",
-            "  EXIT/QUIT"
+            "   MOVE X<v> Y<v> [S<v>]",
+            "   ABS, REL",
+            "   HOME",
+            "   CALIBRATE / CAL",
+            "   S<v> or S <v>",
+            "   LIMITS [ON|OFF]",
+            "   POS",
+            "   RESET_STOP",
+            "   EXIT/QUIT"
         ]
         status_info = [ 
             f"Current Position: X={current_x_mm:.3f} mm, Y={current_y_mm:.3f} mm",
