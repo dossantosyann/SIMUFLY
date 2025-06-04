@@ -800,141 +800,141 @@ def _calculate_scan_positions(nx, ny, current_xlim_mm, current_ylim_mm, point_ma
 
 def _execute_automatic_scan(stdscr, project_path, positions_list,
                             num_y_bands, num_x_images_per_band, imgs_per_pos_at_location,
-                            base_ui_prompts, base_ui_values): # Pour réafficher l'UI de base
+                            base_ui_prompts, base_ui_values): # Pour référence de la hauteur de l'UI
     """
     Exécute la séquence de scan automatique : déplacement et capture d'images.
     """
     global current_x_mm, current_y_mm, TARGET_SPEED_MM_S, MM_PER_MICROSTEP, \
-           MICROSTEPS_PER_MM, MINIMUM_PULSE_CYCLE_DELAY # Accès aux variables globales pour le mouvement
+           MICROSTEPS_PER_MM, MINIMUM_PULSE_CYCLE_DELAY
 
-    # --- CORRECTION ICI ---
-    # Sauvegarder l'état précédent du curseur et le cacher pour le scan
-    previous_cursor_visibility = curses.curs_set(0)
+    previous_cursor_visibility = curses.curs_set(0) # Cacher le curseur, sauvegarder l'état précédent
+
+    h, w = stdscr.getmaxyx()
+
+    # --- CORRECTION DU CALCUL DE LA LIGNE DE DÉBUT DU STATUT ---
+    # L'affichage des paramètres par draw_automatic_mode_ui se structure comme suit:
+    # Ligne 1: Titre de la page
+    # Ligne 2: Séparateur sous le titre
+    # Ligne 3: Vide (implicitement)
+    # Ligne 4 à (4 + len(base_ui_prompts) - 1): Les invites de paramètres
+    last_prompt_line_idx = 4 + len(base_ui_prompts) - 1
+    status_start_line_y = last_prompt_line_idx + 2 # Laisse une ligne vide après les prompts
+
+    # S'assurer que status_start_line_y est dans les limites de l'écran
+    if status_start_line_y >= h - 5: # Garder au moins 5 lignes pour le statut du scan
+        status_start_line_y = h - 5
+    if status_start_line_y < 0 : # Cas extrême d'écran très petit
+        status_start_line_y = 0
     # --- FIN CORRECTION ---
 
-    # Définir une zone pour les messages de statut du scan
-    h, w = stdscr.getmaxyx()
-    # Ajuster status_start_line_y pour être plus bas si base_ui_prompts est long
-    # ou si l'affichage des paramètres (ui_values) prend de la place.
-    # On suppose que draw_automatic_mode_ui a été appelé juste avant, laissant les paramètres visibles.
-    # On va écrire SOUS la zone des paramètres.
-    # len(base_ui_prompts) donne le nombre de lignes de prompts. +1 pour le titre, +2 pour les séparateurs.
-    # +5 est une estimation, à ajuster si nécessaire.
-    params_display_height = 1 (title) + 1 (separator) + len(base_ui_prompts) + 1 (separator) + 1 (blank)
-    status_start_line_y = params_display_height + 2 # Ligne de début pour les messages de scan
-
-    # Effacer la zone de statut potentiel avant de commencer
-    for i in range(6): # Effacer quelques lignes pour les messages de scan
-        if status_start_line_y + i < h: # Vérifier les limites de l'écran
+    # Effacer la zone de statut avant de commencer
+    for i in range(6): # Nombre de lignes à potentiellement utiliser pour le statut
+        if status_start_line_y + i < h: # Vérifier les limites
             stdscr.move(status_start_line_y + i, 1)
             stdscr.clrtoeol()
     stdscr.refresh()
 
-
-    global_image_num_for_prefix = 0 # Pour le ImXX dans BXX_ImXX_IdXX.tiff
-
+    global_image_num_for_prefix = 0
     scan_aborted = False
     final_scan_message = "Scan non initié."
 
     for pos_idx, target_pos_coords in enumerate(positions_list):
-        target_x, target_y = target_pos_coords
-        current_band_idx_for_naming = pos_idx // num_x_images_per_band
+        # Vérifier si l'on a encore de la place pour afficher les messages de statut
+        if status_start_line_y + 4 >= h : # Si pas assez de place pour tous les messages
+             # Afficher un message minimal et continuer, ou gérer l'erreur
+             stdscr.move(h-1, 1); stdscr.clrtoeol()
+             stdscr.addstr(h-1, 1, f"Scan {pos_idx+1}/{len(positions_list)}...", curses.A_REVERSE)
+             stdscr.refresh()
+        else: # Affichage normal du statut
+            target_x, target_y = target_pos_coords
+            current_band_idx_for_naming = pos_idx // num_x_images_per_band
 
-        # Message de statut du déplacement
-        stdscr.move(status_start_line_y, 1); stdscr.clrtoeol()
-        move_status_msg = f"Scan {pos_idx+1}/{len(positions_list)}: Bande {current_band_idx_for_naming+1}, Pos ({target_x:.1f}, {target_y:.1f})"
-        stdscr.addstr(status_start_line_y, 1, move_status_msg[:w-2])
-        stdscr.refresh()
+            stdscr.move(status_start_line_y, 1); stdscr.clrtoeol()
+            move_status_msg = f"Scan {pos_idx+1}/{len(positions_list)}: Bande {current_band_idx_for_naming+1}, Pos ({target_x:.1f}, {target_y:.1f})"
+            stdscr.addstr(status_start_line_y, 1, move_status_msg[:w-2])
+            stdscr.refresh()
 
-        # --- Logique de Déplacement ---
-        delta_x_to_move = target_x - current_x_mm
-        delta_y_to_move = target_y - current_y_mm
-        path_length_mm = math.sqrt(delta_x_to_move**2 + delta_y_to_move**2)
+            # --- Logique de Déplacement ---
+            delta_x_to_move = target_x - current_x_mm
+            delta_y_to_move = target_y - current_y_mm
+            path_length_mm = math.sqrt(delta_x_to_move**2 + delta_y_to_move**2)
 
-        if path_length_mm >= (MM_PER_MICROSTEP / 2.0):
-            current_move_speed = TARGET_SPEED_MM_S
-            if current_move_speed <= 1e-6:
-                stdscr.move(status_start_line_y + 1, 1); stdscr.clrtoeol()
-                stdscr.addstr(status_start_line_y + 1, 1, "Erreur: Vitesse de déplacement trop faible. Scan annulé.")
-                stdscr.refresh()
-                final_scan_message = "Erreur: Vitesse de déplacement trop faible. Scan annulé."
+            if path_length_mm >= (MM_PER_MICROSTEP / 2.0):
+                current_move_speed = TARGET_SPEED_MM_S
+                if current_move_speed <= 1e-6:
+                    stdscr.move(status_start_line_y + 1, 1); stdscr.clrtoeol()
+                    stdscr.addstr(status_start_line_y + 1, 1, "Erreur: Vitesse de déplacement trop faible. Scan annulé.")
+                    stdscr.refresh()
+                    final_scan_message = "Erreur: Vitesse de déplacement trop faible. Scan annulé."
+                    scan_aborted = True; break
+                
+                time_for_move_s = path_length_mm / current_move_speed
+                _dx_steps_cart = round(-delta_x_to_move * MICROSTEPS_PER_MM)
+                _dy_steps_cart = round(delta_y_to_move * MICROSTEPS_PER_MM)
+                _steps_m1 = _dx_steps_cart + _dy_steps_cart
+                _steps_m2 = _dx_steps_cart - _dy_steps_cart
+                num_iterations = max(abs(int(_steps_m1)), abs(int(_steps_m2)))
+
+                if num_iterations > 0:
+                    pulse_delay = time_for_move_s / num_iterations
+                    actual_pulse_delay = max(MINIMUM_PULSE_CYCLE_DELAY, pulse_delay)
+                    move_motors_coordinated(int(_steps_m1), int(_steps_m2), actual_pulse_delay)
+            
+            current_x_mm = round(target_x, 3)
+            current_y_mm = round(target_y, 3)
+            # --- Fin Logique de Déplacement ---
+
+            stdscr.move(status_start_line_y + 1, 1); stdscr.clrtoeol()
+            capture_info_msg = f"  Capture de {imgs_per_pos_at_location} image(s) à (X:{current_x_mm:.1f}, Y:{current_y_mm:.1f})"
+            stdscr.addstr(status_start_line_y + 1, 1, capture_info_msg[:w-2])
+            stdscr.refresh()
+
+            # --- Logique de Capture ---
+            filename_prefix = f"B{current_band_idx_for_naming:02d}_Im{global_image_num_for_prefix:02d}"
+            base_path_for_this_capture = os.path.join(project_path, filename_prefix)
+            
+            capture_output_msgs = capture_images(imgs_per_pos_at_location, base_path_for_this_capture)
+            
+            for k_msg_idx in range(min(2, len(capture_output_msgs))):
+                if status_start_line_y + 2 + k_msg_idx < h:
+                    stdscr.move(status_start_line_y + 2 + k_msg_idx, 1); stdscr.clrtoeol()
+                    stdscr.addstr(status_start_line_y + 2 + k_msg_idx, 3, capture_output_msgs[k_msg_idx][:w-4])
+            stdscr.refresh()
+
+            critical_capture_error = False
+            for msg in capture_output_msgs:
+                if "Erreur" in msg and "Résolution" not in msg and "directory" not in msg and "Impossible d'ouvrir la webcam" not in msg:
+                    critical_capture_error = True; break
+                if "Impossible d'ouvrir la webcam" in msg:
+                    critical_capture_error = True; break
+
+            if critical_capture_error:
+                final_scan_message = "Erreur critique de capture. Scan interrompu."
                 scan_aborted = True; break
             
-            time_for_move_s = path_length_mm / current_move_speed
-            _dx_steps_cart = round(-delta_x_to_move * MICROSTEPS_PER_MM)
-            _dy_steps_cart = round(delta_y_to_move * MICROSTEPS_PER_MM)
-            _steps_m1 = _dx_steps_cart + _dy_steps_cart
-            _steps_m2 = _dx_steps_cart - _dy_steps_cart
-            num_iterations = max(abs(int(_steps_m1)), abs(int(_steps_m2)))
+            global_image_num_for_prefix += 1
+            time.sleep(0.1)
 
-            if num_iterations > 0:
-                pulse_delay = time_for_move_s / num_iterations
-                actual_pulse_delay = max(MINIMUM_PULSE_CYCLE_DELAY, pulse_delay)
-                move_motors_coordinated(int(_steps_m1), int(_steps_m2), actual_pulse_delay)
-        
-        current_x_mm = round(target_x, 3)
-        current_y_mm = round(target_y, 3)
-        # --- Fin Logique de Déplacement ---
-
-        # Message de statut de la capture
-        stdscr.move(status_start_line_y + 1, 1); stdscr.clrtoeol()
-        capture_info_msg = f"  Capture de {imgs_per_pos_at_location} image(s) à (X:{current_x_mm:.1f}, Y:{current_y_mm:.1f})"
-        stdscr.addstr(status_start_line_y + 1, 1, capture_info_msg[:w-2])
-        stdscr.refresh()
-
-        # --- Logique de Capture ---
-        filename_prefix = f"B{current_band_idx_for_naming:02d}_Im{global_image_num_for_prefix:02d}"
-        base_path_for_this_capture = os.path.join(project_path, filename_prefix)
-        
-        capture_output_msgs = capture_images(imgs_per_pos_at_location, base_path_for_this_capture)
-        
-        # Afficher les messages de capture
-        for k_msg_idx in range(min(2, len(capture_output_msgs))): # Afficher max 2 lignes de messages de capture
-            if status_start_line_y + 2 + k_msg_idx < h:
-                stdscr.move(status_start_line_y + 2 + k_msg_idx, 1); stdscr.clrtoeol()
-                stdscr.addstr(status_start_line_y + 2 + k_msg_idx, 3, capture_output_msgs[k_msg_idx][:w-4])
-        stdscr.refresh()
-
-        # Vérifier erreur critique de capture
-        critical_capture_error = False
-        for msg in capture_output_msgs:
-            # Ignorer les avertissements courants ou messages informatifs
-            if "Erreur" in msg and "Résolution" not in msg and "directory" not in msg and "Impossible d'ouvrir la webcam" not in msg:
-                critical_capture_error = True
-                break
-            if "Impossible d'ouvrir la webcam" in msg: # Ceci est une erreur critique
-                critical_capture_error = True
-                break
-
-
-        if critical_capture_error:
-            final_scan_message = "Erreur critique de capture. Scan interrompu."
-            scan_aborted = True; break
-        
-        global_image_num_for_prefix += 1
-        time.sleep(0.1)
-
-        # Vérifier interruption utilisateur
-        stdscr.nodelay(True)
-        key_press = stdscr.getch()
-        stdscr.nodelay(False)
-        if key_press == 27: # ESC
-            final_scan_message = "Scan interrompu par l'utilisateur."
-            scan_aborted = True; break
+            stdscr.nodelay(True)
+            key_press = stdscr.getch()
+            stdscr.nodelay(False)
+            if key_press == 27: # ESC
+                final_scan_message = "Scan interrompu par l'utilisateur."
+                scan_aborted = True; break
     
     if not scan_aborted:
         final_scan_message = "Scan automatique terminé avec succès."
 
-    # Afficher le message final du scan
-    final_msg_line_y = status_start_line_y + 4 # Ligne pour le message de fin de scan
-    if final_msg_line_y < h:
+    final_msg_line_y = status_start_line_y + 4 
+    if final_msg_line_y < h :
         stdscr.move(final_msg_line_y, 1); stdscr.clrtoeol()
         stdscr.addstr(final_msg_line_y, 1, final_scan_message[:w-2], curses.A_BOLD)
+    else: # Fallback si l'écran est trop petit pour la ligne de message final dédiée
+        stdscr.move(h-1,1); stdscr.clrtoeol()
+        stdscr.addstr(h-1,1, final_scan_message[:w-2], curses.A_BOLD)
     stdscr.refresh()
     
-    # --- CORRECTION ICI ---
-    curses.curs_set(previous_cursor_visibility) # Restaurer l'état original du curseur
-    # --- FIN CORRECTION ---
+    curses.curs_set(previous_cursor_visibility)
     return final_scan_message
 
 def draw_automatic_mode_ui(stdscr, title, prompts, current_values, status_message="", help_message=""):
