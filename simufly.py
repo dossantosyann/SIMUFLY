@@ -259,9 +259,9 @@ def perform_calibration_cycle():
 
     # --- Calibration Axe Y (vers Y-min) ---
     output_messages.append(f"Calibration Axe Y à {cal_speed:.2f} mm/s...")
-    # Directions pour -Y : M1 négatif, M2 positif (basé sur la config CoreXY steps_m1=dx+dy, steps_m2=dx-dy)
-    dir_device_m1.on()  # Supposant .on() = direction négative pour M1
-    dir_device_m2.off() # Supposant .off() = direction positive pour M2
+    # Directions pour -Y : M1 négatif, M2 positif (selon votre configuration CoreXY)
+    dir_device_m1.on()  # M1 -> dir pour -Y
+    dir_device_m2.off() # M2 -> dir pour -Y
     time.sleep(0.002)
 
     homed_y = False
@@ -270,12 +270,12 @@ def perform_calibration_cycle():
             output_messages.append("Fin de course Y activé.")
             homed_y = True
             break
-        pul_device_m1.on(); pul_device_m2.on() # Pulser M1 et M2 pour un mouvement Y pur
+        pul_device_m1.on(); pul_device_m2.on() 
         time.sleep(MIN_PULSE_WIDTH)
         pul_device_m1.off(); pul_device_m2.off()
         inter_pulse_delay = actual_pulse_cycle_delay_cal - MIN_PULSE_WIDTH
         if inter_pulse_delay > 0: time.sleep(inter_pulse_delay)
-        if i > 0 and i % 2000 == 0: time.sleep(0.001) # Petite pause pour éviter surchauffe/blocage?
+        if i > 0 and i % 2000 == 0: time.sleep(0.001) 
 
     if not homed_y:
         output_messages.append("Erreur: Calibration Axe Y échouée (fin de course non atteint).")
@@ -284,9 +284,11 @@ def perform_calibration_cycle():
 
     # --- Calibration Axe X (vers X-min) ---
     output_messages.append(f"Calibration Axe X à {cal_speed:.2f} mm/s...")
-    # Directions pour -X : M1 négatif, M2 négatif
-    dir_device_m1.on()  # Supposant .on() = direction négative pour M1
-    dir_device_m2.on()  # Supposant .on() = direction négative pour M2
+    # --- CORRECTION DE LA DIRECTION POUR L'AXE X ---
+    # Rétablir la configuration qui fonctionnait pour le mouvement -X
+    dir_device_m1.off() 
+    dir_device_m2.off() 
+    # --- FIN CORRECTION ---
     time.sleep(0.002)
 
     homed_x = False
@@ -295,8 +297,6 @@ def perform_calibration_cycle():
             output_messages.append("Fin de course X activé.")
             homed_x = True
             break
-        # Pour un mouvement X pur, les deux moteurs doivent tourner dans la même direction "cartésienne"
-        # Si M1 et M2 sont pulsés ensemble avec ces directions, cela devrait donner un mouvement X
         pul_device_m1.on(); pul_device_m2.on() 
         time.sleep(MIN_PULSE_WIDTH)
         pul_device_m1.off(); pul_device_m2.off()
@@ -309,26 +309,21 @@ def perform_calibration_cycle():
         return output_messages
     output_messages.append("Point zéro physique X trouvé.")
 
-    # À ce stade, le robot est au point de déclenchement des fins de course (zéro machine physique)
-    # Définir temporairement cette position comme (0,0) logique pour le déplacement d'offset
     current_x_mm = 0.0
     current_y_mm = 0.0
     output_messages.append(f"Zéro machine physique défini comme (0,0) temporaire.")
 
-    # --- Déplacement vers le nouveau point d'origine logique ---
     offset_val = CALIBRATION_LOGICAL_ORIGIN_OFFSET_MM
     output_messages.append(f"Déplacement de +{offset_val}mm en X et +{offset_val}mm pour établir le nouveau zéro logique...")
     
-    # move_corexy mettra à jour current_x_mm et current_y_mm à approx. (offset_val, offset_val)
     motor_msgs_offset = move_corexy(offset_val, offset_val, actual_pulse_cycle_delay_cal)
     if motor_msgs_offset: output_messages.extend(motor_msgs_offset)
     
     output_messages.append(f"Position physique atteinte: X={current_x_mm:.3f}, Y={current_y_mm:.3f} (par rapport au zéro machine).")
 
-    # --- Définir cette nouvelle position comme le (0,0) logique final ---
     current_x_mm = 0.0
     current_y_mm = 0.0
-    absolute_mode = True # Passer en mode absolu après calibration
+    absolute_mode = True 
     output_messages.append(f"Nouveau point d'origine logique (0,0) défini à la position de décalage.")
     output_messages.append(f"--- Calibration Terminée --- Position logique actuelle: X={current_x_mm:.3f}, Y={current_y_mm:.3f} mm")
     output_messages.append("Mode réglé sur ABS (Absolu).")
