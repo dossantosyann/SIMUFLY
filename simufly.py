@@ -805,7 +805,7 @@ def _execute_automatic_scan(stdscr, project_path, positions_list,
     Exécute la séquence de scan automatique : calibration, déplacement, capture, retour Home.
     """
     global current_x_mm, current_y_mm, TARGET_SPEED_MM_S, MM_PER_MICROSTEP, \
-           MICROSTEPS_PER_MM, MINIMUM_PULSE_CYCLE_DELAY, HOMING_SPEED_MM_S, MAX_SPEED_MM_S
+           MICROSTEPS_PER_MM, MINIMUM_PULSE_CYCLE_DELAY, HOMING_SPEED_MM_S/2, MAX_SPEED_MM_S
            # Ajout de HOMING_SPEED_MM_S et MAX_SPEED_MM_S
 
     previous_cursor_visibility = curses.curs_set(0) 
