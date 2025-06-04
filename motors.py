@@ -157,7 +157,6 @@ def move_motors_coordinated(steps_m1_target, steps_m2_target, pulse_cycle_delay_
             if accel_phase_actual_steps > 0:
                 # Interpolate from effective_start_end_delay towards target_cruise_delay over accel_phase_actual_steps
                 # The fraction here is 1.0 effectively, as we want the delay at the END of these accel_phase_actual_steps
-                fraction_at_peak = 1.0 
                 # However, if accel_phase_actual_steps is very short, it might not reach target_cruise_delay.
                 # The interpolation for step i handles this. We need the delay at step (accel_phase_actual_steps - 1).
                 if accel_phase_actual_steps == 1: # Single step accel
@@ -406,6 +405,14 @@ def parse_command_and_execute(line):
         output_messages.append("  Calibration initiated...")
         cal_messages = perform_calibration_cycle()
         output_messages.extend(cal_messages)
+    elif (instruction == "SET" and len(parts) > 1 and parts[1] == "HOME") or instruction == "SETHOME":
+        output_messages.append("  Setting current position as HOME (0,0)...")
+        current_x_mm = 0.0
+        current_y_mm = 0.0
+        absolute_mode = True # Good practice after setting a new home
+        output_messages.append(f"  New logical origin set at current physical position.")
+        output_messages.append(f"  Current Position: X={current_x_mm:.3f} mm, Y={current_y_mm:.3f} mm")
+        output_messages.append("  Mode set to ABS (Absolute).")
     elif instruction == "HOME":
         output_messages.append("  Homing (HOME to logical 0,0):")
         target_x_abs = 0.0
@@ -539,10 +546,10 @@ def parse_command_and_execute(line):
         actual_target_y_mm = max(0.0, min(final_target_y_mm, YLIM_MM))
 
         clamped_output_needed = False
-        if XLIM_MM != float('inf'): 
+        if XLIM_MM != float('inf') or YLIM_MM != float('inf') : # Check if limits are active
             if abs(actual_target_x_mm - final_target_x_mm) > 1e-9 or abs(actual_target_y_mm - final_target_y_mm) > 1e-9 : 
                  clamped_output_needed = True
-        elif final_target_x_mm < 0 or final_target_y_mm < 0 : 
+        elif final_target_x_mm < 0 or final_target_y_mm < 0 : # Also check for negative targets even if limits are INF
              clamped_output_needed = True
 
 
@@ -687,6 +694,7 @@ def _curses_main_loop(stdscr):
             "  MOVE X<v> Y<v> [S<v>]",
             "  ABS, REL",
             "  HOME                   (Moves to logical 0,0 or resets coords)",
+            "  SETHOME / SET HOME     (Sets current physical position as 0,0)",
             "  CALIBRATE / CAL        (Physical homing with endstops)",
             "  S<v> or S <v>", 
             "  LIMITS [ON|OFF]", 
