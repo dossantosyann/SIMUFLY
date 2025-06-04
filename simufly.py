@@ -83,6 +83,7 @@ MAX_START_PULSE_CYCLE_DELAY_FOR_RAMP = 0.01  # Max delay for the start/end of ra
 
 # --- Automatic Mode Scan Parameters --- 
 POINT_MARGIN_MM = 10.0  # Marge des points de scan par rapport aux limites XLIM_MM, YLIM_MM
+CALIBRATION_LOGICAL_ORIGIN_OFFSET_MM = 20.0 # Décalage pour le nouveau (0,0) après calibration
 
 # --- System State ---
 current_x_mm = 0.0
@@ -240,58 +241,98 @@ def move_corexy(delta_x_mm, delta_y_mm, pulse_cycle_delay_for_move):
     return motor_messages
 
 def perform_calibration_cycle():
-    global current_x_mm, current_y_mm, TARGET_SPEED_MM_S, absolute_mode
-    output_messages = ["--- Starting Calibration Cycle ---"]
+    global current_x_mm, current_y_mm, TARGET_SPEED_MM_S, absolute_mode, CALIBRATION_LOGICAL_ORIGIN_OFFSET_MM
+    output_messages = ["--- Démarrage du Cycle de Calibration ---"]
+
     if not all([pul_device_m1, dir_device_m1, pul_device_m2, dir_device_m2, endstop_x, endstop_y]):
-        output_messages.append("Error: GPIOs or endstop devices not initialized for calibration.")
+        output_messages.append("Erreur: GPIOs ou capteurs de fin de course non initialisés.")
         return output_messages
+
     cal_speed = min(CALIBRATION_SPEED_MM_S, MAX_SPEED_MM_S)
     if cal_speed <= 1e-6:
-        output_messages.append(f"Error: Calibration speed {cal_speed:.2f} mm/s is too low.")
+        output_messages.append(f"Erreur: Vitesse de calibration ({cal_speed:.2f} mm/s) trop faible.")
         return output_messages
+    
     pulse_cycle_delay_cal = MM_PER_MICROSTEP / cal_speed
     actual_pulse_cycle_delay_cal = max(MINIMUM_PULSE_CYCLE_DELAY, pulse_cycle_delay_cal)
     max_steps_travel = int(MAX_CALIBRATION_TRAVEL_MM * MICROSTEPS_PER_MM)
 
-    output_messages.append(f"Calibrating Y-axis at {cal_speed:.2f} mm/s...")
-    dir_device_m1.on(); dir_device_m2.off(); time.sleep(0.002)
+    # --- Calibration Axe Y (vers Y-min) ---
+    output_messages.append(f"Calibration Axe Y à {cal_speed:.2f} mm/s...")
+    # Directions pour -Y : M1 négatif, M2 positif (basé sur la config CoreXY steps_m1=dx+dy, steps_m2=dx-dy)
+    dir_device_m1.on()  # Supposant .on() = direction négative pour M1
+    dir_device_m2.off() # Supposant .off() = direction positive pour M2
+    time.sleep(0.002)
+
     homed_y = False
     for i in range(max_steps_travel):
         if endstop_y.is_active:
-            output_messages.append("Y-axis endstop triggered."); homed_y = True; break
-        pul_device_m1.on(); pul_device_m2.on(); time.sleep(MIN_PULSE_WIDTH)
+            output_messages.append("Fin de course Y activé.")
+            homed_y = True
+            break
+        pul_device_m1.on(); pul_device_m2.on() # Pulser M1 et M2 pour un mouvement Y pur
+        time.sleep(MIN_PULSE_WIDTH)
         pul_device_m1.off(); pul_device_m2.off()
         inter_pulse_delay = actual_pulse_cycle_delay_cal - MIN_PULSE_WIDTH
         if inter_pulse_delay > 0: time.sleep(inter_pulse_delay)
-        if i > 0 and i % 2000 == 0: time.sleep(0.001) 
-    if not homed_y:
-        output_messages.append("Error: Y-axis calibration failed. Stopping."); return output_messages
-    current_y_mm = 0.0
-    output_messages.append(f"Y-axis origin set: {current_y_mm:.3f} mm. Backing off {CALIBRATION_BACKOFF_MM:.2f} mm...")
-    motor_msgs_by = move_corexy(0.0, CALIBRATION_BACKOFF_MM, actual_pulse_cycle_delay_cal) 
-    if motor_msgs_by: output_messages.extend(motor_msgs_by)
-    output_messages.append(f"Y-axis backed off. New Y={current_y_mm:.3f} mm.")
+        if i > 0 and i % 2000 == 0: time.sleep(0.001) # Petite pause pour éviter surchauffe/blocage?
 
-    output_messages.append(f"Calibrating X-axis at {cal_speed:.2f} mm/s...")
-    dir_device_m1.off(); dir_device_m2.off(); time.sleep(0.002)
+    if not homed_y:
+        output_messages.append("Erreur: Calibration Axe Y échouée (fin de course non atteint).")
+        return output_messages
+    output_messages.append("Point zéro physique Y trouvé.")
+
+    # --- Calibration Axe X (vers X-min) ---
+    output_messages.append(f"Calibration Axe X à {cal_speed:.2f} mm/s...")
+    # Directions pour -X : M1 négatif, M2 négatif
+    dir_device_m1.on()  # Supposant .on() = direction négative pour M1
+    dir_device_m2.on()  # Supposant .on() = direction négative pour M2
+    time.sleep(0.002)
+
     homed_x = False
     for i in range(max_steps_travel):
-        if endstop_x.is_active: 
-            output_messages.append("X-axis endstop triggered."); homed_x = True; break
-        pul_device_m1.on(); pul_device_m2.on(); time.sleep(MIN_PULSE_WIDTH)
+        if endstop_x.is_active:
+            output_messages.append("Fin de course X activé.")
+            homed_x = True
+            break
+        # Pour un mouvement X pur, les deux moteurs doivent tourner dans la même direction "cartésienne"
+        # Si M1 et M2 sont pulsés ensemble avec ces directions, cela devrait donner un mouvement X
+        pul_device_m1.on(); pul_device_m2.on() 
+        time.sleep(MIN_PULSE_WIDTH)
         pul_device_m1.off(); pul_device_m2.off()
         inter_pulse_delay = actual_pulse_cycle_delay_cal - MIN_PULSE_WIDTH
         if inter_pulse_delay > 0: time.sleep(inter_pulse_delay)
         if i > 0 and i % 2000 == 0: time.sleep(0.001)
+
     if not homed_x:
-        output_messages.append("Error: X-axis calibration failed. Stopping."); return output_messages
-    current_x_mm = 0.0 
-    output_messages.append(f"X-axis origin set: {current_x_mm:.3f} mm. Backing off {CALIBRATION_BACKOFF_MM:.2f} mm...")
-    motor_msgs_bx = move_corexy(CALIBRATION_BACKOFF_MM, 0.0, actual_pulse_cycle_delay_cal) 
-    if motor_msgs_bx: output_messages.extend(motor_msgs_bx)
-    output_messages.append(f"X-axis backed off. New X={current_x_mm:.3f} mm.")
-    output_messages.append(f"--- Calibration Complete --- Final: X={current_x_mm:.3f}, Y={current_y_mm:.3f} mm")
-    absolute_mode = True; output_messages.append("Mode set to ABS.")
+        output_messages.append("Erreur: Calibration Axe X échouée (fin de course non atteint).")
+        return output_messages
+    output_messages.append("Point zéro physique X trouvé.")
+
+    # À ce stade, le robot est au point de déclenchement des fins de course (zéro machine physique)
+    # Définir temporairement cette position comme (0,0) logique pour le déplacement d'offset
+    current_x_mm = 0.0
+    current_y_mm = 0.0
+    output_messages.append(f"Zéro machine physique défini comme (0,0) temporaire.")
+
+    # --- Déplacement vers le nouveau point d'origine logique ---
+    offset_val = CALIBRATION_LOGICAL_ORIGIN_OFFSET_MM
+    output_messages.append(f"Déplacement de +{offset_val}mm en X et +{offset_val}mm pour établir le nouveau zéro logique...")
+    
+    # move_corexy mettra à jour current_x_mm et current_y_mm à approx. (offset_val, offset_val)
+    motor_msgs_offset = move_corexy(offset_val, offset_val, actual_pulse_cycle_delay_cal)
+    if motor_msgs_offset: output_messages.extend(motor_msgs_offset)
+    
+    output_messages.append(f"Position physique atteinte: X={current_x_mm:.3f}, Y={current_y_mm:.3f} (par rapport au zéro machine).")
+
+    # --- Définir cette nouvelle position comme le (0,0) logique final ---
+    current_x_mm = 0.0
+    current_y_mm = 0.0
+    absolute_mode = True # Passer en mode absolu après calibration
+    output_messages.append(f"Nouveau point d'origine logique (0,0) défini à la position de décalage.")
+    output_messages.append(f"--- Calibration Terminée --- Position logique actuelle: X={current_x_mm:.3f}, Y={current_y_mm:.3f} mm")
+    output_messages.append("Mode réglé sur ABS (Absolu).")
+    
     return output_messages
 
 def capture_images(num_captures_requested, base_image_path_with_prefix): # Renamed arg for clarity
@@ -805,7 +846,7 @@ def _execute_automatic_scan(stdscr, project_path, positions_list,
     Exécute la séquence de scan automatique : calibration, déplacement, capture, retour Home.
     """
     global current_x_mm, current_y_mm, TARGET_SPEED_MM_S, MM_PER_MICROSTEP, \
-           MICROSTEPS_PER_MM, MINIMUM_PULSE_CYCLE_DELAY, HOMING_SPEED_MM_S/2, MAX_SPEED_MM_S
+           MICROSTEPS_PER_MM, MINIMUM_PULSE_CYCLE_DELAY, HOMING_SPEED_MM_S, MAX_SPEED_MM_S
            # Ajout de HOMING_SPEED_MM_S et MAX_SPEED_MM_S
 
     previous_cursor_visibility = curses.curs_set(0) 
