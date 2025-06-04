@@ -498,23 +498,60 @@ def parse_command_and_execute(line):
     return output_messages, True
 
 def draw_manual_mode_ui(stdscr, header_lines, status_lines, command_output_lines, input_prompt):
-    stdscr.clear(); max_y, max_x = stdscr.getmaxyx(); current_y = 0
-    for line in header_lines: 
-        if current_y < max_y: stdscr.addstr(current_y, 0, line[:max_x-1]); current_y += 1
-    if current_y < max_y: stdscr.addstr(current_y, 0, "-"*(max_x-1)); current_y +=1
-    for line in status_lines:
-        if current_y < max_y: stdscr.addstr(current_y, 0, line[:max_x-1]); current_y += 1
-    if current_y < max_y: stdscr.addstr(current_y, 0, "-"*(max_x-1)); current_y +=1
-    output_start_y = current_y; available_lines_for_output = max_y - output_start_y - 2 
-    start_idx = 0
-    if len(command_output_lines) > available_lines_for_output and available_lines_for_output > 0 :
-        start_idx = len(command_output_lines) - available_lines_for_output
+    """Draws the entire Manual Mode UI in the curses window."""
+    stdscr.clear()
+    max_y, max_x = stdscr.getmaxyx()
+    current_y = 0
+
+    for i, line in enumerate(header_lines):
+        if current_y < max_y:
+            stdscr.addstr(current_y, 0, line[:max_x-1])
+            current_y += 1
+    if current_y < max_y:
+        stdscr.addstr(current_y, 0, "-" * (max_x -1) )
+        current_y +=1
+
+    for i, line in enumerate(status_lines):
+        if current_y < max_y:
+            stdscr.addstr(current_y, 0, line[:max_x-1])
+            current_y += 1
+    if current_y < max_y:
+        stdscr.addstr(current_y, 0, "-" * (max_x-1) )
+        current_y +=1
+    
+    output_start_y = current_y
+    # available_lines_for_output: Lignes restantes pour la sortie des commandes,
+    # moins la ligne de séparation et la ligne d'invite.
+    available_lines_for_output = max_y - output_start_y - 2
+    
+    # --- Correction/Vérification pour start_index ---
+    start_index = 0 # Initialiser start_index par défaut
+    if available_lines_for_output < 0: # Si la fenêtre est trop petite
+        available_lines_for_output = 0
+
+    if len(command_output_lines) > available_lines_for_output:
+        start_index = len(command_output_lines) - available_lines_for_output
+    # --- Fin de la correction/vérification ---
+    
     for i, line in enumerate(command_output_lines[start_index:]):
-        if output_start_y + i < max_y - 2: stdscr.addstr(output_start_y + i, 0, line[:max_x-1]) 
-    current_y = max_y - 2 
-    if current_y > 0 : stdscr.addstr(current_y, 0, "-"*(max_x-1))
-    input_line_y = max_y - 1
-    if input_line_y > 0: stdscr.addstr(input_line_y, 0, input_prompt); stdscr.move(input_line_y, len(input_prompt)) 
+        # S'assurer de ne pas écrire sur les deux dernières lignes (séparateur et invite)
+        if output_start_y + i < max_y - 2:
+            stdscr.addstr(output_start_y + i, 0, line[:max_x-1])
+    
+    current_y = max_y - 2 # Ligne pour le séparateur au-dessus de l'invite
+    if current_y >= 0 and current_y < max_y : # Vérifier que current_y est valide
+         stdscr.addstr(current_y, 0, "-" * (max_x-1) )
+    
+    input_line_y = max_y - 1 # Ligne pour l'invite de commande
+    if input_line_y >=0 and input_line_y < max_y: # Vérifier que input_line_y est valide
+        stdscr.addstr(input_line_y, 0, input_prompt)
+        # S'assurer que le curseur est positionné à un endroit valide
+        if len(input_prompt) < max_x:
+            stdscr.move(input_line_y, len(input_prompt))
+        else: # Cas où le prompt lui-même est trop long (improbable mais défensif)
+            stdscr.move(input_line_y, max_x -1)
+
+
     stdscr.refresh()
 
 def _manual_mode_loop(stdscr):
