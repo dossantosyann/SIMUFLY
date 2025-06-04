@@ -644,10 +644,16 @@ def _get_string_input_curses(stdscr, y, x, prompt_text, max_len=50):
         elif key == curses.KEY_RIGHT:
             if cursor_display_pos < len(input_chars):
                 cursor_display_pos += 1
-        elif curses.ascii.isprint(key): # Printable characters
+        elif (key >= 32 and key <= 126) or \
+             (key >= 160 and key <= 255): # Caractères ASCII imprimables et Latin-1 courants
             if len(input_chars) < max_len:
-                input_chars.insert(cursor_display_pos, chr(key))
-                cursor_display_pos += 1
+                try:
+                    input_chars.insert(cursor_display_pos, chr(key))
+                    cursor_display_pos += 1
+                except ValueError:
+                    # Au cas où chr(key) échouerait pour une raison imprévue pour ces plages
+                    pass 
+        # Le reste de la fonction _get_string_input_curses reste inchangé
         # Ignore other special keys for simplicity
 
 def _get_int_input_curses(stdscr, y, x, prompt_text, min_val=None, max_val=None):
