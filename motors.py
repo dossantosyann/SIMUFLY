@@ -3,6 +3,8 @@ import time
 import math
 import re # For command parsing
 import curses # <-- Ajout pour l'interface CLI améliorée
+import cv2 # <-- Added for OpenCV webcam capture
+import os # <-- Added for path manipulation
 
 # GPIO Pin Configuration (BCM numbering) - As provided by user
 # Motor 1 (often Motor A in CoreXY nomenclature)
@@ -124,97 +126,68 @@ def move_motors_coordinated(steps_m1_target, steps_m2_target, pulse_cycle_delay_
     # --- Trapezoidal Profile Calculation ---
     target_cruise_delay = pulse_cycle_delay_for_move # Delay for the cruise speed phase
 
-    # Initial ramp parameters (start/end delay is symmetrical for this profile)
     _start_delay_uncapped = target_cruise_delay * RAMP_START_DELAY_MULTIPLIER
     _calculated_initial_delay = min(_start_delay_uncapped, MAX_START_PULSE_CYCLE_DELAY_FOR_RAMP)
-    # effective_start_end_delay is the delay at the very start of accel and very end of decel
     effective_start_end_delay = max(target_cruise_delay, _calculated_initial_delay)
 
     use_ramps = False
-    ramp_segment_duration_steps = 0 # Number of steps for one ramp segment (accel or decel)
+    ramp_segment_duration_steps = 0 
 
-    # Check if ramps are meaningful (start/end speed different from cruise) and move is long enough
-    if (effective_start_end_delay > target_cruise_delay + MIN_PULSE_WIDTH / 2.0) and total_iterations >= 4: # Min 2 steps per ramp
+    if (effective_start_end_delay > target_cruise_delay + MIN_PULSE_WIDTH / 2.0) and total_iterations >= 4: 
         use_ramps = True
-        # Calculate ideal ramp segment length based on percentage
         ramp_segment_duration_steps = max(1, int(RAMP_PERCENTAGE * total_iterations))
 
     accel_phase_actual_steps = 0
-    cruise_phase_actual_steps = total_iterations # Default to all cruise if no ramps
+    cruise_phase_actual_steps = total_iterations 
     decel_phase_actual_steps = 0
-    
-    delay_at_peak_or_cruise_start = target_cruise_delay # Actual delay when cruise starts or decel starts (if no cruise)
+    delay_at_peak_or_cruise_start = target_cruise_delay 
 
     if use_ramps:
         if total_iterations < 2 * ramp_segment_duration_steps:
-            # Short move: Ramps meet/overlap. No cruise phase.
-            # Accel takes first half, decel takes second half.
             accel_phase_actual_steps = total_iterations // 2
             decel_phase_actual_steps = total_iterations - accel_phase_actual_steps
             cruise_phase_actual_steps = 0
-            
-            # Calculate the delay at the peak (end of accel phase / start of decel phase)
             if accel_phase_actual_steps > 0:
-                # Interpolate from effective_start_end_delay towards target_cruise_delay over accel_phase_actual_steps
-                # The fraction here is 1.0 effectively, as we want the delay at the END of these accel_phase_actual_steps
-                # However, if accel_phase_actual_steps is very short, it might not reach target_cruise_delay.
-                # The interpolation for step i handles this. We need the delay at step (accel_phase_actual_steps - 1).
-                if accel_phase_actual_steps == 1: # Single step accel
-                     delay_at_peak_or_cruise_start = effective_start_end_delay # Approx.
+                if accel_phase_actual_steps == 1: 
+                     delay_at_peak_or_cruise_start = effective_start_end_delay 
                 else:
-                     # Delay at the last step of the (shortened) accel ramp
                      fraction = (accel_phase_actual_steps - 1.0) / float(accel_phase_actual_steps)
                      delay_at_peak_or_cruise_start = effective_start_end_delay + \
                                         (target_cruise_delay - effective_start_end_delay) * fraction
-                
-                # Ensure delay_at_peak_or_cruise_start does not "overshoot" target_cruise_delay in the wrong direction
-                if target_cruise_delay < effective_start_end_delay: # Normal accel case (target is faster speed = smaller delay)
+                if target_cruise_delay < effective_start_end_delay: 
                     delay_at_peak_or_cruise_start = max(target_cruise_delay, delay_at_peak_or_cruise_start)
-                else: # Target is slower speed (larger delay) or same
+                else: 
                     delay_at_peak_or_cruise_start = min(target_cruise_delay, delay_at_peak_or_cruise_start)
-            else: # No accel steps
+            else: 
                 delay_at_peak_or_cruise_start = effective_start_end_delay
-
-        else: # Long move: Full ramps and cruise possible
+        else: 
             accel_phase_actual_steps = ramp_segment_duration_steps
             decel_phase_actual_steps = ramp_segment_duration_steps
             cruise_phase_actual_steps = total_iterations - accel_phase_actual_steps - decel_phase_actual_steps
-            delay_at_peak_or_cruise_start = target_cruise_delay # Will reach target cruise speed/delay
+            delay_at_peak_or_cruise_start = target_cruise_delay 
     
-    # Step indices for phase transitions (i from 0 to total_iterations - 1)
-    # Accel phase: i from 0 to accel_phase_actual_steps - 1
-    # Cruise phase: i from accel_phase_actual_steps to accel_phase_actual_steps + cruise_phase_actual_steps - 1
-    # Decel phase: i from accel_phase_actual_steps + cruise_phase_actual_steps to total_iterations - 1
-
     for i in range(total_iterations):
-        current_step_delay = target_cruise_delay # Default for cruise phase
+        current_step_delay = target_cruise_delay 
 
         if use_ramps and i < accel_phase_actual_steps:
-            # --- Acceleration Phase ---
             if accel_phase_actual_steps > 0:
                 fraction_completed = i / float(accel_phase_actual_steps)
                 current_step_delay = effective_start_end_delay + \
                                    (target_cruise_delay - effective_start_end_delay) * fraction_completed
-            else: # Should not happen if accel_phase_actual_steps is 0 and use_ramps is true for accel
+            else: 
                 current_step_delay = target_cruise_delay
         
         elif use_ramps and i >= (accel_phase_actual_steps + cruise_phase_actual_steps):
-            # --- Deceleration Phase ---
             if decel_phase_actual_steps > 0:
                 step_into_decel = i - (accel_phase_actual_steps + cruise_phase_actual_steps)
                 fraction_completed = step_into_decel / float(decel_phase_actual_steps)
-                
-                # Deceleration starts from the speed/delay achieved before this phase
-                # This is delay_at_peak_or_cruise_start
                 current_step_delay = delay_at_peak_or_cruise_start + \
                                    (effective_start_end_delay - delay_at_peak_or_cruise_start) * fraction_completed
-            else: # Should not happen
+            else: 
                  current_step_delay = target_cruise_delay
-        # Else: --- Cruise Phase --- (current_step_delay is already target_cruise_delay)
 
         current_step_delay = max(MINIMUM_PULSE_CYCLE_DELAY, current_step_delay)
 
-        # --- Pulse Generation ---
         perform_pulse_m1 = (i < abs_steps_m1)
         perform_pulse_m2 = (i < abs_steps_m2)
 
@@ -276,22 +249,12 @@ def perform_calibration_cycle():
         
     pulse_cycle_delay_cal = MM_PER_MICROSTEP / cal_speed
     actual_pulse_cycle_delay_cal = max(MINIMUM_PULSE_CYCLE_DELAY, pulse_cycle_delay_cal)
-
     max_steps_travel = int(MAX_CALIBRATION_TRAVEL_MM * MICROSTEPS_PER_MM)
 
     # --- Calibrate Y-axis (moving towards negative Y) ---
     output_messages.append(f"Calibrating Y-axis at {cal_speed:.2f} mm/s...")
-    # For CoreXY, moving Y negative: M1 decreases (dir=ON), M2 increases (dir=OFF)
-    # In the original script's move_corexy, for delta_y_mm > 0 (positive Y):
-    #   delta_y_steps_cartesian = round(delta_y_mm * MICROSTEPS_PER_MM)
-    #   steps_m1 = delta_y_steps_cartesian  (positive) -> dir_device_m1.off()
-    #   steps_m2 = -delta_y_steps_cartesian (negative) -> dir_device_m2.on()
-    # So for negative Y (delta_y_mm < 0):
-    #   delta_y_steps_cartesian will be negative.
-    #   steps_m1 = delta_y_steps_cartesian (negative) -> dir_device_m1.on()
-    #   steps_m2 = -delta_y_steps_cartesian (positive) -> dir_device_m2.off()
-    dir_device_m1.on()  # Correct for negative Y movement
-    dir_device_m2.off() # Correct for negative Y movement
+    dir_device_m1.on()  
+    dir_device_m2.off() 
     time.sleep(0.002)
 
     homed_y = False
@@ -301,7 +264,6 @@ def perform_calibration_cycle():
             homed_y = True
             break
         
-        # Both motors step for Y movement in CoreXY
         pul_device_m1.on()
         pul_device_m2.on()
         time.sleep(MIN_PULSE_WIDTH)
@@ -311,7 +273,7 @@ def perform_calibration_cycle():
         inter_pulse_delay = actual_pulse_cycle_delay_cal - MIN_PULSE_WIDTH
         if inter_pulse_delay > 0:
             time.sleep(inter_pulse_delay)
-        if i > 0 and i % 2000 == 0: time.sleep(0.001) # Small pause to allow system to catch up if needed
+        if i > 0 and i % 2000 == 0: time.sleep(0.001) 
 
     if not homed_y:
         output_messages.append("Error: Y-axis calibration failed (endstop not triggered). Stopping.")
@@ -319,27 +281,15 @@ def perform_calibration_cycle():
 
     current_y_mm = 0.0
     output_messages.append(f"Y-axis origin set at trigger point: {current_y_mm:.3f} mm.")
-
     output_messages.append(f"Backing off Y-axis by {CALIBRATION_BACKOFF_MM:.2f} mm...")
-    # move_corexy(delta_x, delta_y, ...)
-    motor_msgs_by = move_corexy(0.0, CALIBRATION_BACKOFF_MM, actual_pulse_cycle_delay_cal) # Positive Y backoff
+    motor_msgs_by = move_corexy(0.0, CALIBRATION_BACKOFF_MM, actual_pulse_cycle_delay_cal) 
     if motor_msgs_by: output_messages.extend(motor_msgs_by)
     output_messages.append(f"Y-axis backed off. New position Y={current_y_mm:.3f} mm.")
 
-
     # --- Calibrate X-axis (moving towards negative X) ---
     output_messages.append(f"Calibrating X-axis at {cal_speed:.2f} mm/s...")
-    # For CoreXY, moving X negative: M1 decreases (dir=ON), M2 decreases (dir=ON)
-    # In the original script's move_corexy, for delta_x_mm > 0 (positive X):
-    #   delta_x_steps_cartesian = round(-delta_x_mm * MICROSTEPS_PER_MM) (negative)
-    #   steps_m1 = delta_x_steps_cartesian (negative) -> dir_device_m1.on()
-    #   steps_m2 = delta_x_steps_cartesian (negative) -> dir_device_m2.on()
-    # So for negative X (delta_x_mm < 0):
-    #   delta_x_steps_cartesian will be positive.
-    #   steps_m1 = delta_x_steps_cartesian (positive) -> dir_device_m1.off()
-    #   steps_m2 = delta_x_steps_cartesian (positive) -> dir_device_m2.off()
-    dir_device_m1.off() # Correct for negative X movement
-    dir_device_m2.off() # Correct for negative X movement
+    dir_device_m1.off() 
+    dir_device_m2.off() 
     time.sleep(0.002)
 
     homed_x = False
@@ -349,7 +299,6 @@ def perform_calibration_cycle():
             homed_x = True
             break
         
-        # Both motors step for X movement in CoreXY
         pul_device_m1.on()
         pul_device_m2.on()
         time.sleep(MIN_PULSE_WIDTH)
@@ -359,7 +308,7 @@ def perform_calibration_cycle():
         inter_pulse_delay = actual_pulse_cycle_delay_cal - MIN_PULSE_WIDTH
         if inter_pulse_delay > 0:
             time.sleep(inter_pulse_delay)
-        if i > 0 and i % 2000 == 0: time.sleep(0.001) # Small pause
+        if i > 0 and i % 2000 == 0: time.sleep(0.001)
 
     if not homed_x:
         output_messages.append("Error: X-axis calibration failed (endstop not triggered). Stopping.")
@@ -367,10 +316,8 @@ def perform_calibration_cycle():
     
     current_x_mm = 0.0 
     output_messages.append(f"X-axis origin set at trigger point: {current_x_mm:.3f} mm.")
-
     output_messages.append(f"Backing off X-axis by {CALIBRATION_BACKOFF_MM:.2f} mm...")
-    # move_corexy(delta_x, delta_y, ...)
-    motor_msgs_bx = move_corexy(CALIBRATION_BACKOFF_MM, 0.0, actual_pulse_cycle_delay_cal) # Positive X backoff
+    motor_msgs_bx = move_corexy(CALIBRATION_BACKOFF_MM, 0.0, actual_pulse_cycle_delay_cal) 
     if motor_msgs_bx: output_messages.extend(motor_msgs_bx)
     output_messages.append(f"X-axis backed off. New position X={current_x_mm:.3f} mm.")
 
@@ -379,6 +326,71 @@ def perform_calibration_cycle():
     absolute_mode = True 
     output_messages.append("Mode set to ABS (Absolute).")
     return output_messages
+
+# --- NEW: Webcam Capture Function ---
+def capture_images(num_captures_requested, base_image_path):
+    """
+    Captures a specified number of images from the webcam.
+    Saves images as base_image_path_0.jpg, base_image_path_1.jpg, etc.
+    Assumes webcam is at index 0.
+    Returns a list of output messages.
+    """
+    messages = []
+    cap = cv2.VideoCapture(0) # 0 is usually the default webcam
+
+    if not cap.isOpened():
+        messages.append("Error: Could not open webcam. Is it connected and not in use?")
+        return messages
+
+    # Allow camera to initialize
+    time.sleep(0.5) 
+
+    actual_captures = 0
+    for i in range(num_captures_requested):
+        ret, frame = cap.read()
+        if not ret:
+            messages.append(f"Error: Could not read frame {i+1}/{num_captures_requested}.")
+            if actual_captures == 0 and i == 0: # Total failure on first frame
+                cap.release()
+                return messages
+            break # Stop if frames can't be read
+
+        # Create directory if it doesn't exist from the base_image_path
+        directory = os.path.dirname(base_image_path)
+        if directory and not os.path.exists(directory):
+            try:
+                os.makedirs(directory, exist_ok=True)
+                messages.append(f"  Created directory: {directory}")
+            except OSError as e:
+                messages.append(f"  Error creating directory {directory}: {e}")
+                cap.release()
+                return messages
+        
+        # Construct filename: e.g., /path/to/image_0.jpg
+        filename_base = os.path.basename(base_image_path)
+        image_filename = os.path.join(directory, f"{filename_base}_{i}.jpg")
+
+        try:
+            cv2.imwrite(image_filename, frame)
+            messages.append(f"  Image captured and saved: {image_filename}")
+            actual_captures += 1
+        except Exception as e:
+            messages.append(f"  Error saving image {image_filename}: {e}")
+            # Decide if we should stop or continue
+            if actual_captures == 0 and i == 0 : # Failed to save even the first image
+                 cap.release()
+                 return messages
+            break 
+        
+        if i < num_captures_requested - 1: # Small delay between captures if multiple
+            time.sleep(0.2) 
+
+    cap.release()
+    if actual_captures > 0:
+        messages.append(f"--- Capture complete. {actual_captures} image(s) saved. ---")
+    else:
+        messages.append(f"--- Capture failed. No images saved. ---")
+    return messages
 
 
 def parse_command_and_execute(line):
@@ -390,10 +402,12 @@ def parse_command_and_execute(line):
     
     output_messages = []
     command = line.strip().upper()
+    # Keep original case for path in CAPTURE command
+    parts_orig_case = line.strip().split()
     parts = command.split()
     instruction = parts[0] if parts else ""
 
-    output_messages.append(f"CMD: {command}")
+    output_messages.append(f"CMD: {line.strip()}") # Show original case command
 
     if instruction == "ABS":
         absolute_mode = True
@@ -409,7 +423,7 @@ def parse_command_and_execute(line):
         output_messages.append("  Setting current position as HOME (0,0)...")
         current_x_mm = 0.0
         current_y_mm = 0.0
-        absolute_mode = True # Good practice after setting a new home
+        absolute_mode = True 
         output_messages.append(f"  New logical origin set at current physical position.")
         output_messages.append(f"  Current Position: X={current_x_mm:.3f} mm, Y={current_y_mm:.3f} mm")
         output_messages.append("  Mode set to ABS (Absolute).")
@@ -497,13 +511,39 @@ def parse_command_and_execute(line):
             y_lim_display = f"{YLIM_MM:.0f}" if YLIM_MM != float('inf') else "INF (Disabled)"
             output_messages.append(f"  Current effective limits: X=[0, {x_lim_display}], Y=[0, {y_lim_display}]")
             output_messages.append("  Use 'LIMITS ON' or 'LIMITS OFF' to change.")
+
+    # --- NEW: CAPTURE Command ---
+    elif instruction == "CAPTURE":
+        if len(parts_orig_case) == 3: # CAPTURE N PATH
+            num_images_str = parts_orig_case[1]
+            image_base_path_str = parts_orig_case[2] # Use original case for path
+            try:
+                num_img = int(num_images_str)
+                if num_img <= 0:
+                    output_messages.append("  Error: Number of images (N) must be a positive integer.")
+                elif not image_base_path_str:
+                    output_messages.append("  Error: Image base path (PATH) cannot be empty.")
+                else:
+                    output_messages.append(f"  Initiating capture of {num_img} image(s) to path starting with '{image_base_path_str}'...")
+                    # This function call might take some time
+                    capture_msgs = capture_images(num_img, image_base_path_str) 
+                    output_messages.extend(capture_msgs)
+            except ValueError:
+                output_messages.append(f"  Error: Invalid number of images '{num_images_str}'. Must be an integer.")
+            except Exception as e: # Catch other potential errors from capture_images
+                output_messages.append(f"  An error occurred during image capture: {e}")
+        else:
+            output_messages.append("  Usage: CAPTURE <N> <PATH>")
+            output_messages.append("    N: Number of images to capture (e.g., 1, 3).")
+            output_messages.append("    PATH: Base name and path for images (e.g., /tmp/shot or ./captures/img).")
+            output_messages.append("          Images will be saved as PATH_0.jpg, PATH_1.jpg, etc.")
             
     elif instruction == "MOVE" :
         target_x_cmd = None
         target_y_cmd = None
         s_value_this_cmd_req = None 
         
-        for part in parts[1:]:
+        for part in parts[1:]: # Use uppercase parts for parsing X, Y, S parameters
             if part.startswith('X'):
                 try: target_x_cmd = float(part[1:])
                 except ValueError: output_messages.append(f"  Invalid X value: {part}"); return output_messages, True
@@ -546,10 +586,10 @@ def parse_command_and_execute(line):
         actual_target_y_mm = max(0.0, min(final_target_y_mm, YLIM_MM))
 
         clamped_output_needed = False
-        if XLIM_MM != float('inf') or YLIM_MM != float('inf') : # Check if limits are active
+        if XLIM_MM != float('inf') or YLIM_MM != float('inf') : 
             if abs(actual_target_x_mm - final_target_x_mm) > 1e-9 or abs(actual_target_y_mm - final_target_y_mm) > 1e-9 : 
                  clamped_output_needed = True
-        elif final_target_x_mm < 0 or final_target_y_mm < 0 : # Also check for negative targets even if limits are INF
+        elif final_target_x_mm < 0 or final_target_y_mm < 0 : 
              clamped_output_needed = True
 
 
@@ -696,6 +736,7 @@ def _curses_main_loop(stdscr):
             "  HOME                   (Moves to logical 0,0 or resets coords)",
             "  SETHOME / SET HOME     (Sets current physical position as 0,0)",
             "  CALIBRATE / CAL        (Physical homing with endstops)",
+            "  CAPTURE <N> <PATH>     (Captures N images to PATH_i.jpg)", # <-- Added CAPTURE help
             "  S<v> or S <v>", 
             "  LIMITS [ON|OFF]", 
             "  POS",
@@ -717,7 +758,7 @@ def _curses_main_loop(stdscr):
             if input_line_y > 0 and input_line_y > (len(header) + len(status_info) +2) : 
                  stdscr.move(input_line_y, len(input_prompt_text)) 
                  curses.echo() 
-                 cmd_line_bytes = stdscr.getstr(input_line_y, len(input_prompt_text), 60) 
+                 cmd_line_bytes = stdscr.getstr(input_line_y, len(input_prompt_text), 120) # Increased buffer for longer paths
                  curses.noecho() 
                  cmd_line = cmd_line_bytes.decode('utf-8').strip()
             else: 
@@ -779,6 +820,9 @@ if __name__ == "__main__":
         finally:
             print("Cleaning up GPIO before exit...") 
             cleanup_gpio() 
+            # It's good practice to also release camera if it was somehow left open,
+            # though capture_images should handle its own release.
+            # For robustness, you could add a global camera object and try to release it here if it exists.
             print("Program terminated.") 
     else:
         print("GPIO setup failed. Program will not start controller interface.")
