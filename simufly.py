@@ -358,21 +358,18 @@ def capture_images(num_captures_requested, base_image_path_with_prefix): # Renam
                 if actual_captures == 0 and i == 0: return messages 
                 break 
             
-            # base_image_path_with_prefix contient déjà le chemin du dossier et le préfixe BXX_ImXX
             directory = os.path.dirname(base_image_path_with_prefix)
-            filename_prefix_only = os.path.basename(base_image_path_with_prefix) # Ex: B00_Im00
+            filename_prefix_only = os.path.basename(base_image_path_with_prefix) 
 
-            # --- MODIFICATION NOMENCLATURE ---
             image_filename = os.path.join(directory, f"{filename_prefix_only}_Id{i:02d}.tiff") 
             
             try:
-                # S'assurer que le dossier existe (normalement créé par _automatic_mode_loop)
                 if directory and not os.path.exists(directory):
                     os.makedirs(directory, exist_ok=True)
                     messages.append(f"  Création dossier (sécurité): {directory}")
 
                 cv2.imwrite(image_filename, frame)
-                messages.append(f"  Image capturée: {os.path.basename(image_filename)}") # Afficher juste le nom du fichier
+                messages.append(f"  Image capturée: {os.path.basename(image_filename)}") 
                 actual_captures += 1 
             except Exception as e:
                 messages.append(f"  Erreur sauvegarde image {os.path.basename(image_filename)}: {e}") 
@@ -411,140 +408,223 @@ def parse_command_and_execute(line):
         output_messages.append("  Homing (to logical 0,0):")
         target_x_abs, target_y_abs = 0.0, 0.0
         dx_home, dy_home = 0.0, 0.0
-        if absolute_mode: dx_home = target_x_abs - current_x_mm; dy_home = target_y_abs - current_y_mm
+        # In ABS mode, calculate deltas. In REL, target is (0,0) relative to current.
+        if absolute_mode: 
+            dx_home = target_x_abs - current_x_mm
+            dy_home = target_y_abs - current_y_mm
+        else: # REL mode home means move by (0,0) effectively just resetting logical coords
+            dx_home = 0.0 
+            dy_home = 0.0
+            # current_x_mm = 0.0 # Position reset is handled after potential move
+            # current_y_mm = 0.0
+
         actual_homing_speed = min(HOMING_SPEED_MM_S, MAX_SPEED_MM_S)
         home_path_length_mm = math.sqrt(dx_home**2 + dy_home**2)
-        if home_path_length_mm > (MM_PER_MICROSTEP / 2.0) and absolute_mode:
+
+        if home_path_length_mm > (MM_PER_MICROSTEP / 2.0) and absolute_mode : # Only move physically if in ABS and there's a delta
             output_messages.append(f"    Moving to 0,0 from {current_x_mm:.2f},{current_y_mm:.2f} at {actual_homing_speed:.2f} mm/s")
             time_for_home_move_s = home_path_length_mm / actual_homing_speed
+            
+            # Calculate steps (move_corexy expects deltas)
+            # We already have dx_home, dy_home for ABS.
+            # For REL, they are 0,0 so move_corexy won't do physical motion.
+            
             delta_x_steps_cartesian_home = round(-dx_home * MICROSTEPS_PER_MM)
             delta_y_steps_cartesian_home = round(dy_home * MICROSTEPS_PER_MM)
             steps_m1_home = delta_x_steps_cartesian_home + delta_y_steps_cartesian_home
             steps_m2_home = delta_x_steps_cartesian_home - delta_y_steps_cartesian_home
             num_iterations_home = max(abs(int(steps_m1_home)), abs(int(steps_m2_home)))
+
             if num_iterations_home > 0:
                 pulse_delay_for_home_move = time_for_home_move_s / num_iterations_home
                 actual_pulse_delay_for_home_move = max(MINIMUM_PULSE_CYCLE_DELAY, pulse_delay_for_home_move)
-                motor_msgs = move_corexy(dx_home, dy_home, actual_pulse_delay_for_home_move)
+                motor_msgs = move_corexy(dx_home, dy_home, actual_pulse_delay_for_home_move) # move_corexy updates current_x, current_y
                 output_messages.extend(motor_msgs)
-            else: current_x_mm = target_x_abs; current_y_mm = target_y_abs
-        else:
-            current_x_mm = target_x_abs; current_y_mm = target_y_abs
-            output_messages.append("    Already at logical 0,0." if absolute_mode else "    Logical pos reset to 0,0. No physical move in REL.")
+            # current_x_mm and current_y_mm are updated by move_corexy
+        
+        # After physical move (if any), set logical coordinates to 0,0
+        current_x_mm = target_x_abs 
+        current_y_mm = target_y_abs
+        if not absolute_mode: # If in REL mode and HOME was called
+             output_messages.append("    Logical pos reset to 0,0. No physical move in REL unless X0 Y0 was specified.")
+        elif home_path_length_mm <= (MM_PER_MICROSTEP / 2.0) and absolute_mode:
+             output_messages.append("    Already at logical 0,0.")
+
         output_messages.append(f"  New position: X={current_x_mm:.3f}, Y={current_y_mm:.3f}")
-    elif instruction.startswith("S") and instruction != "MOVE":
+
+
+    elif instruction.startswith("S") and instruction != "MOVE": # S<val> or S <val>
         try:
             speed_val_mm_s_req = 0.0
-            if len(instruction) > 1 and instruction[1:].replace('.', '', 1).isdigit(): speed_val_mm_s_req = float(instruction[1:])
-            elif len(parts) > 1 and parts[1].replace('.', '', 1).isdigit(): speed_val_mm_s_req = float(parts[1])
-            else: output_messages.append(f"  Invalid S format."); return output_messages, True
+            if len(instruction) > 1 and instruction[1:].replace('.', '', 1).isdigit(): # S<val>
+                speed_val_mm_s_req = float(instruction[1:])
+            elif len(parts) > 1 and parts[1].replace('.', '', 1).isdigit(): # S <val>
+                speed_val_mm_s_req = float(parts[1])
+            else:
+                output_messages.append(f"  Invalid S format. Use S<value> or S <value>.")
+                return output_messages, True # Continue manual mode
+
             if speed_val_mm_s_req > 0:
                 if speed_val_mm_s_req > MAX_SPEED_MM_S:
                     TARGET_SPEED_MM_S = MAX_SPEED_MM_S
                     output_messages.append(f"  Requested speed {speed_val_mm_s_req:.2f} > limit {MAX_SPEED_MM_S:.2f}. Speed set to MAX.")
-                else: TARGET_SPEED_MM_S = speed_val_mm_s_req; output_messages.append(f"  Global target speed set to: {TARGET_SPEED_MM_S:.2f} mm/s")
-            else: output_messages.append(f"  Speed S must be positive (<= {MAX_SPEED_MM_S:.2f} mm/s).")
-        except ValueError: output_messages.append(f"  Invalid speed value in S: {parts[1] if len(parts) > 1 else instruction[1:]}")
+                else:
+                    TARGET_SPEED_MM_S = speed_val_mm_s_req
+                    output_messages.append(f"  Global target speed set to: {TARGET_SPEED_MM_S:.2f} mm/s")
+            else:
+                output_messages.append(f"  Speed S must be positive (<= {MAX_SPEED_MM_S:.2f} mm/s).")
+        except ValueError:
+            output_messages.append(f"  Invalid speed value in S: {parts[1] if len(parts) > 1 else instruction[1:]}")
+    
     elif instruction == "LIMITS":
         if len(parts) > 1:
             sub_command = parts[1].upper()
-            if sub_command == "OFF": XLIM_MM, YLIM_MM = float('inf'), float('inf'); output_messages.append("  Coordinate limits DISABLED.")
-            elif sub_command == "ON": XLIM_MM, YLIM_MM = DEFAULT_XLIM_MM, DEFAULT_YLIM_MM; output_messages.append(f"  Limits ENABLED (X:[0,{XLIM_MM:.0f}], Y:[0,{YLIM_MM:.0f}]).")
-            else: output_messages.append("  Usage: LIMITS [ON|OFF]")
+            if sub_command == "OFF":
+                XLIM_MM, YLIM_MM = float('inf'), float('inf')
+                output_messages.append("  Coordinate limits DISABLED.")
+            elif sub_command == "ON":
+                XLIM_MM, YLIM_MM = DEFAULT_XLIM_MM, DEFAULT_YLIM_MM
+                output_messages.append(f"  Limits ENABLED (X:[0,{XLIM_MM:.0f}], Y:[0,{YLIM_MM:.0f}]).")
+            else:
+                output_messages.append("  Usage: LIMITS [ON|OFF]")
         else:
-            x_disp = f"{XLIM_MM:.0f}" if XLIM_MM!=float('inf') else "INF"; y_disp = f"{YLIM_MM:.0f}" if YLIM_MM!=float('inf') else "INF"
+            x_disp = f"{XLIM_MM:.0f}" if XLIM_MM!=float('inf') else "INF"
+            y_disp = f"{YLIM_MM:.0f}" if YLIM_MM!=float('inf') else "INF"
             output_messages.append(f"  Limits: X=[0, {x_disp}], Y=[0, {y_disp}]. Use 'LIMITS ON/OFF'.")
-    elif instruction == "CAPTURE":
-        if len(parts_orig_case) == 3:
+
+    elif instruction == "CAPTURE": # Usage: CAPTURE <N> <PATH_PREFIX>
+        if len(parts_orig_case) == 3: # CAPTURE N PATH
             try:
                 num_img = int(parts_orig_case[1])
-                image_base_path_str = parts_orig_case[2]
-                if num_img <= 0: output_messages.append("  Error: N must be positive.")
-                elif not image_base_path_str: output_messages.append("  Error: PATH cannot be empty.")
+                image_base_path_str = parts_orig_case[2] # This is base_image_path_with_prefix
+
+                if num_img <= 0:
+                    output_messages.append("  Error: N (number of images) must be positive.")
+                elif not image_base_path_str:
+                    output_messages.append("  Error: PATH_PREFIX cannot be empty.")
                 else:
-                    output_messages.append(f"  Capturing {num_img} image(s) to '{image_base_path_str}'...");
-                    capture_msgs = capture_images(num_img, image_base_path_str); output_messages.extend(capture_msgs)
-            except ValueError: output_messages.append(f"  Error: Invalid N '{parts_orig_case[1]}'. Must be integer.")
-            except Exception as e: output_messages.append(f"  Capture error: {e}")
-        else: output_messages.append("  Usage: CAPTURE <N> <PATH> (e.g. CAPTURE 1 ./shot)")
-    elif instruction == "MOVE" :
+                    output_messages.append(f"  Capturing {num_img} image(s) to '{image_base_path_str}_IdXX.tiff'...");
+                    # Ensure directory exists for the prefix
+                    capture_dir = os.path.dirname(image_base_path_str)
+                    if capture_dir and not os.path.exists(capture_dir):
+                        try:
+                            os.makedirs(capture_dir, exist_ok=True)
+                            output_messages.append(f"  Created directory: {capture_dir}")
+                        except OSError as e:
+                            output_messages.append(f"  Error creating directory {capture_dir}: {e}")
+                            return output_messages, True # Abort capture if dir creation fails
+
+                    capture_msgs = capture_images(num_img, image_base_path_str) # Pass the full prefix
+                    output_messages.extend(capture_msgs)
+            except ValueError:
+                output_messages.append(f"  Error: Invalid N '{parts_orig_case[1]}'. Must be an integer.")
+            except Exception as e:
+                output_messages.append(f"  Capture error: {e}")
+        else:
+            output_messages.append("  Usage: CAPTURE <N> <PATH_PREFIX> (e.g. CAPTURE 1 ./capture_dir/shot)")
+
+    elif instruction == "MOVE" : # MOVE X<val> Y<val> S<val> (any order, any missing)
         target_x_cmd, target_y_cmd, s_value_this_cmd_req = None, None, None
         for part in parts[1:]:
             # --- CORRECTED SECTION START ---
             if part.startswith('X'):
-                try:
-                    target_x_cmd = float(part[1:])
-                except ValueError:
-                    output_messages.append(f"  Invalid X: {part}")
-                    return output_messages, True
+                try: target_x_cmd = float(part[1:])
+                except ValueError: output_messages.append(f"  Invalid X: {part}"); return output_messages, True
             elif part.startswith('Y'):
-                try:
-                    target_y_cmd = float(part[1:])
-                except ValueError:
-                    output_messages.append(f"  Invalid Y: {part}")
-                    return output_messages, True
+                try: target_y_cmd = float(part[1:])
+                except ValueError: output_messages.append(f"  Invalid Y: {part}"); return output_messages, True
             elif part.startswith('S'):
-                try:
-                    s_value_this_cmd_req = float(part[1:])
-                except ValueError:
-                    output_messages.append(f"  Invalid S in MOVE: {part}")
+                try: s_value_this_cmd_req = float(part[1:])
+                except ValueError: output_messages.append(f"  Invalid S in MOVE: {part}"); # Don't return, use global S
             # --- CORRECTED SECTION END ---
 
-        if target_x_cmd is None and target_y_cmd is None: output_messages.append("  No X or Y for MOVE."); return output_messages, True
-        current_move_speed_mm_s = TARGET_SPEED_MM_S
+        if target_x_cmd is None and target_y_cmd is None:
+            output_messages.append("  No X or Y coordinate provided for MOVE."); return output_messages, True
+
+        current_move_speed_mm_s = TARGET_SPEED_MM_S # Default to global
         if s_value_this_cmd_req is not None:
             if s_value_this_cmd_req > 0:
-                if s_value_this_cmd_req > MAX_SPEED_MM_S: current_move_speed_mm_s = MAX_SPEED_MM_S; output_messages.append(f"  MOVE speed {s_value_this_cmd_req:.2f} > limit. Clamped to MAX: {current_move_speed_mm_s:.2f}.")
-                else: current_move_speed_mm_s = s_value_this_cmd_req
-            else: output_messages.append(f"  Speed S in MOVE must be positive. Using global {TARGET_SPEED_MM_S:.2f}.")
-        current_move_speed_mm_s = min(current_move_speed_mm_s, MAX_SPEED_MM_S)
-        final_target_x_mm, final_target_y_mm = current_x_mm, current_y_mm
+                if s_value_this_cmd_req > MAX_SPEED_MM_S:
+                    current_move_speed_mm_s = MAX_SPEED_MM_S
+                    output_messages.append(f"  MOVE speed {s_value_this_cmd_req:.2f} > limit. Clamped to MAX: {current_move_speed_mm_s:.2f}.")
+                else:
+                    current_move_speed_mm_s = s_value_this_cmd_req
+            else: # s_value_this_cmd_req <= 0
+                output_messages.append(f"  Speed S in MOVE must be positive. Using global {TARGET_SPEED_MM_S:.2f} mm/s.")
+        current_move_speed_mm_s = min(current_move_speed_mm_s, MAX_SPEED_MM_S) # Ensure it's not over max
+
+        final_target_x_mm, final_target_y_mm = current_x_mm, current_y_mm # Start with current if an axis is not given
         if absolute_mode:
             if target_x_cmd is not None: final_target_x_mm = target_x_cmd
             if target_y_cmd is not None: final_target_y_mm = target_y_cmd
-        else:
+        else: # Relative mode
             if target_x_cmd is not None: final_target_x_mm = current_x_mm + target_x_cmd
             if target_y_cmd is not None: final_target_y_mm = current_y_mm + target_y_cmd
+        
+        # Clamp to 0 and XLIM/YLIM
         actual_target_x_mm = max(0.0, min(final_target_x_mm, XLIM_MM))
         actual_target_y_mm = max(0.0, min(final_target_y_mm, YLIM_MM))
+
         clamped = False
-        if XLIM_MM!=float('inf') or YLIM_MM!=float('inf'):
-            if abs(actual_target_x_mm-final_target_x_mm)>1e-9 or abs(actual_target_y_mm-final_target_y_mm)>1e-9 : clamped=True
-        elif final_target_x_mm < 0 or final_target_y_mm < 0 : clamped=True
-        if clamped: output_messages.append(f"  Warn: Target ({final_target_x_mm:.2f},{final_target_y_mm:.2f}) out of bounds. Clamped to ({actual_target_x_mm:.2f},{actual_target_y_mm:.2f}).")
-        delta_x_to_move, delta_y_to_move = actual_target_x_mm - current_x_mm, actual_target_y_mm - current_y_mm
+        if XLIM_MM != float('inf') or YLIM_MM != float('inf'): # Check only if limits are active
+            if abs(actual_target_x_mm - final_target_x_mm) > 1e-9 or \
+               abs(actual_target_y_mm - final_target_y_mm) > 1e-9 :
+                clamped = True
+        elif final_target_x_mm < 0 or final_target_y_mm < 0 : # Also clamped if trying to go below 0
+             clamped = True
+        
+        if clamped:
+            output_messages.append(f"  Warn: Target ({final_target_x_mm:.2f},{final_target_y_mm:.2f}) out of bounds or below 0. Clamped to ({actual_target_x_mm:.2f},{actual_target_y_mm:.2f}).")
+
+        delta_x_to_move = actual_target_x_mm - current_x_mm
+        delta_y_to_move = actual_target_y_mm - current_y_mm
         path_length_mm = math.sqrt(delta_x_to_move**2 + delta_y_to_move**2)
+
         if path_length_mm < (MM_PER_MICROSTEP / 2.0):
-            output_messages.append(f"  Move too small. Current:({current_x_mm:.3f},{current_y_mm:.3f}), Target:({actual_target_x_mm:.3f},{actual_target_y_mm:.3f})")
-            current_x_mm,current_y_mm = round(actual_target_x_mm,3), round(actual_target_y_mm,3)
+            output_messages.append(f"  Move too small or already at target. Current:({current_x_mm:.3f},{current_y_mm:.3f}), Target:({actual_target_x_mm:.3f},{actual_target_y_mm:.3f})")
+            current_x_mm,current_y_mm = round(actual_target_x_mm,3), round(actual_target_y_mm,3) # Update logical position
         else:
             delta_x_steps_cartesian = round(-delta_x_to_move * MICROSTEPS_PER_MM)
             delta_y_steps_cartesian = round(delta_y_to_move * MICROSTEPS_PER_MM)
-            steps_m1, steps_m2 = (delta_x_steps_cartesian + delta_y_steps_cartesian), (delta_x_steps_cartesian - delta_y_steps_cartesian)
+            steps_m1 = delta_x_steps_cartesian + delta_y_steps_cartesian
+            steps_m2 = delta_x_steps_cartesian - delta_y_steps_cartesian
             num_iterations = max(abs(int(steps_m1)), abs(int(steps_m2)))
-            if num_iterations == 0:
-                output_messages.append("  No motor steps for move."); current_x_mm,current_y_mm = round(actual_target_x_mm,3),round(actual_target_y_mm,3)
+
+            if num_iterations == 0: # Should not happen if path_length_mm is sufficient, but defensive
+                output_messages.append("  No motor steps required for this move after rounding.");
+                current_x_mm,current_y_mm = round(actual_target_x_mm,3),round(actual_target_y_mm,3)
             else:
-                if current_move_speed_mm_s <= 1e-6: output_messages.append(f"  Speed {current_move_speed_mm_s:.2e} too low. No move.")
+                if current_move_speed_mm_s <= 1e-6: # Speed too low
+                    output_messages.append(f"  Effective speed {current_move_speed_mm_s:.2e} mm/s is too low. No physical move.")
                 else:
                     time_for_move_s = path_length_mm / current_move_speed_mm_s
                     pulse_delay_for_this_move = time_for_move_s / num_iterations
                     actual_pulse_delay_for_this_move = max(MINIMUM_PULSE_CYCLE_DELAY, pulse_delay_for_this_move)
-                    effective_speed_mm_s = path_length_mm / (num_iterations * actual_pulse_delay_for_this_move) if (num_iterations * actual_pulse_delay_for_this_move) > 1e-9 else current_move_speed_mm_s
+                    
+                    effective_speed_calc_denominator = num_iterations * actual_pulse_delay_for_this_move
+                    effective_speed_mm_s = path_length_mm / effective_speed_calc_denominator if effective_speed_calc_denominator > 1e-9 else current_move_speed_mm_s
+                    
                     output_messages.append(f"  Moving by dx={delta_x_to_move:.3f}, dy={delta_y_to_move:.3f} to X={actual_target_x_mm:.3f}, Y={actual_target_y_mm:.3f}")
                     output_messages.append(f"  Target speed: {current_move_speed_mm_s:.2f}. Effective: {effective_speed_mm_s:.2f} mm/s. Pulse delay: {actual_pulse_delay_for_this_move*1000:.4f} ms.")
-                    motor_msgs = move_corexy(delta_x_to_move, delta_y_to_move, actual_pulse_delay_for_this_move)
+                    
+                    motor_msgs = move_corexy(delta_x_to_move, delta_y_to_move, actual_pulse_delay_for_this_move) # This updates current_x_mm, current_y_mm
                     output_messages.extend(motor_msgs)
+        
         output_messages.append(f"  New position: X={current_x_mm:.3f} mm, Y={current_y_mm:.3f} mm")
+
     elif instruction == "POS":
-        x_disp = f"{XLIM_MM:.0f}" if XLIM_MM!=float('inf') else "INF"; y_disp = f"{YLIM_MM:.0f}" if YLIM_MM!=float('inf') else "INF"
+        x_disp = f"{XLIM_MM:.0f}" if XLIM_MM!=float('inf') else "INF"
+        y_disp = f"{YLIM_MM:.0f}" if YLIM_MM!=float('inf') else "INF"
         output_messages.append(f"  Pos: X={current_x_mm:.3f}, Y={current_y_mm:.3f}. Speed: {TARGET_SPEED_MM_S:.2f} (Max: {MAX_SPEED_MM_S:.2f}). Mode: {'ABS' if absolute_mode else 'REL'}.")
         output_messages.append(f"  Limits: X=[0,{x_disp}], Y=[0,{y_disp}]. Endstops: X={'TRIG' if endstop_x.is_active else 'open'}, Y={'TRIG' if endstop_y.is_active else 'open'}")
+    
     elif instruction in ["EXIT", "QUIT", "MENU"]:
-        output_messages.append("  Returning to main menu..."); return output_messages, False
+        output_messages.append("  Returning to main menu..."); return output_messages, False # Signal to exit manual mode
     else:
-        if instruction: output_messages.append(f"  Unknown command: {instruction}")
-    return output_messages, True
+        if instruction: # If there was any instruction at all
+            output_messages.append(f"  Unknown command: {instruction}")
+        # If input was empty, no message needed here, just loop.
+    return output_messages, True # Continue manual mode
 
 def draw_manual_mode_ui(stdscr, header_lines, status_lines, command_output_lines, input_prompt):
     """Draws the entire Manual Mode UI in the curses window."""
@@ -569,38 +649,30 @@ def draw_manual_mode_ui(stdscr, header_lines, status_lines, command_output_lines
         current_y +=1
     
     output_start_y = current_y
-    # available_lines_for_output: Lignes restantes pour la sortie des commandes,
-    # moins la ligne de séparation et la ligne d'invite.
     available_lines_for_output = max_y - output_start_y - 2
     
-    # --- Correction/Vérification pour start_index ---
-    start_index = 0 # Initialiser start_index par défaut
-    if available_lines_for_output < 0: # Si la fenêtre est trop petite
+    start_index = 0 
+    if available_lines_for_output < 0: 
         available_lines_for_output = 0
 
     if len(command_output_lines) > available_lines_for_output:
         start_index = len(command_output_lines) - available_lines_for_output
-    # --- Fin de la correction/vérification ---
     
     for i, line in enumerate(command_output_lines[start_index:]):
-        # S'assurer de ne pas écrire sur les deux dernières lignes (séparateur et invite)
         if output_start_y + i < max_y - 2:
             stdscr.addstr(output_start_y + i, 0, line[:max_x-1])
     
-    current_y = max_y - 2 # Ligne pour le séparateur au-dessus de l'invite
-    if current_y >= 0 and current_y < max_y : # Vérifier que current_y est valide
+    current_y = max_y - 2 
+    if current_y >= 0 and current_y < max_y : 
          stdscr.addstr(current_y, 0, "-" * (max_x-1) )
     
-    input_line_y = max_y - 1 # Ligne pour l'invite de commande
-    if input_line_y >=0 and input_line_y < max_y: # Vérifier que input_line_y est valide
+    input_line_y = max_y - 1 
+    if input_line_y >=0 and input_line_y < max_y: 
         stdscr.addstr(input_line_y, 0, input_prompt)
-        # S'assurer que le curseur est positionné à un endroit valide
         if len(input_prompt) < max_x:
             stdscr.move(input_line_y, len(input_prompt))
-        else: # Cas où le prompt lui-même est trop long (improbable mais défensif)
+        else: 
             stdscr.move(input_line_y, max_x -1)
-
-
     stdscr.refresh()
 
 def _manual_mode_loop(stdscr):
@@ -626,15 +698,17 @@ def _manual_mode_loop(stdscr):
                  stdscr.move(input_line_y, len(input_prompt_text)); curses.echo() 
                  cmd_line = stdscr.getstr(input_line_y, len(input_prompt_text), 120).decode('utf-8').strip(); curses.noecho() 
             else: cmd_line = ""; last_command_output = ["Terminal too small. Resize or type 'MENU'."]
-            if not cmd_line: 
-                if not last_command_output or (last_command_output and last_command_output[-1] != "Terminal too small. Resize or type 'MENU'." ): last_command_output = [] 
-                continue
+            
+            if not cmd_line and not (last_command_output and last_command_output[-1] == "Terminal too small. Resize or type 'MENU'.") :
+                 last_command_output = [] # Clear output if command is empty and no critical message exists
+                 continue
+
             last_command_output, running_manual_mode = parse_command_and_execute(cmd_line)
         except curses.error as e: curses.noecho(); last_command_output = [f"Curses error: {e}", "Try resize or 'MENU'."]
-        except KeyboardInterrupt: curses.noecho(); last_command_output = ["Interruption. Retour au menu..."]; running_manual_mode = False
-        except Exception as e: curses.noecho(); last_command_output = [f"Erreur: {e}", "Vérifiez la commande."]
-    last_command_output = []
+        except KeyboardInterrupt: curses.noecho(); last_command_output = ["Interruption. Retour au menu..."]; running_manual_mode = False; time.sleep(0.5)
+        except Exception as e: curses.noecho(); last_command_output = [f"Erreur: {e}", "Vérifiez la commande."]; import traceback; last_command_output.append(traceback.format_exc(limit=1))
 
+    last_command_output = [] # Clear output when exiting mode
 
 # --- Curses Input Helper Functions ---
 def _get_string_input_curses(stdscr, y, x, prompt_text, max_len=50):
@@ -644,121 +718,76 @@ def _get_string_input_curses(stdscr, y, x, prompt_text, max_len=50):
     Handles Backspace/Delete for editing.
     Handles Left/Right arrow keys for cursor movement within the input.
     """
-    # curses.echo() # We are handling echo manually via addstr
-    curses.noecho() # Turn off automatic echo
-    stdscr.keypad(True) # Ensure special keys are captured
+    curses.noecho() 
+    stdscr.keypad(True) 
 
     stdscr.addstr(y, x, prompt_text)
-    stdscr.clrtoeol() # Clear anything after the prompt
+    stdscr.clrtoeol() 
     
-    input_chars = [] # Store characters as a list for easier manipulation
-    cursor_display_pos = 0 # Visual cursor position relative to start of input field
+    input_chars = [] 
+    cursor_display_pos = 0 
     
-    # Initial display of prompt
     stdscr.move(y, x + len(prompt_text))
     stdscr.refresh()
 
     while True:
-        # Display current input string
         current_input_str = "".join(input_chars)
-        stdscr.move(y, x + len(prompt_text)) # Move to start of input area
-        stdscr.clrtoeol() # Clear old input string
+        stdscr.move(y, x + len(prompt_text)) 
+        stdscr.clrtoeol() 
         stdscr.addstr(y, x + len(prompt_text), current_input_str)
-        
-        # Place cursor at its current position within the displayed string
         stdscr.move(y, x + len(prompt_text) + cursor_display_pos)
         stdscr.refresh()
-
         key = stdscr.getch()
-
-        if key == 27: # ESC key
-            # curses.echo() # Restore echo if it was on before, but we set noecho
-            return None # Signal cancellation
-        elif key == curses.KEY_ENTER or key == 10 or key == 13: # Enter key
-            # curses.echo()
-            return "".join(input_chars)
-        elif key == curses.KEY_BACKSPACE or key == 127 or key == 8: # Backspace
-            if cursor_display_pos > 0:
-                input_chars.pop(cursor_display_pos - 1)
-                cursor_display_pos -= 1
-        elif key == curses.KEY_DC: # Delete key
-            if cursor_display_pos < len(input_chars):
-                input_chars.pop(cursor_display_pos)
+        if key == 27: return None 
+        elif key == curses.KEY_ENTER or key == 10 or key == 13: return "".join(input_chars)
+        elif key == curses.KEY_BACKSPACE or key == 127 or key == 8: 
+            if cursor_display_pos > 0: input_chars.pop(cursor_display_pos - 1); cursor_display_pos -= 1
+        elif key == curses.KEY_DC: 
+            if cursor_display_pos < len(input_chars): input_chars.pop(cursor_display_pos)
         elif key == curses.KEY_LEFT:
-            if cursor_display_pos > 0:
-                cursor_display_pos -= 1
+            if cursor_display_pos > 0: cursor_display_pos -= 1
         elif key == curses.KEY_RIGHT:
-            if cursor_display_pos < len(input_chars):
-                cursor_display_pos += 1
-        elif (key >= 32 and key <= 126) or \
-             (key >= 160 and key <= 255): # Caractères ASCII imprimables et Latin-1 courants
+            if cursor_display_pos < len(input_chars): cursor_display_pos += 1
+        elif (key >= 32 and key <= 126) or (key >= 160 and key <= 255): 
             if len(input_chars) < max_len:
-                try:
-                    input_chars.insert(cursor_display_pos, chr(key))
-                    cursor_display_pos += 1
-                except ValueError:
-                    # Au cas où chr(key) échouerait pour une raison imprévue pour ces plages
-                    pass 
-        # Le reste de la fonction _get_string_input_curses reste inchangé
-        # Ignore other special keys for simplicity
+                try: input_chars.insert(cursor_display_pos, chr(key)); cursor_display_pos += 1
+                except ValueError: pass 
 
 def _get_int_input_curses(stdscr, y, x, prompt_text, min_val=None, max_val=None):
     """Gets an integer input, validates, and returns it or None."""
-    # Ensures keypad is true for the string input part too
     stdscr.keypad(True)
     while True:
-        # _get_string_input_curses now handles ESC and can return None
-        input_str_obj = _get_string_input_curses(stdscr, y, x, prompt_text, 20) # Max 20 chars for an int
-
-        if input_str_obj is None: # ESC was pressed in _get_string_input_curses
-            return None
-
-        current_input_str = input_str_obj # It's a string if not None
-        
-        # Clear potential previous error message line (y+1)
+        input_str_obj = _get_string_input_curses(stdscr, y, x, prompt_text, 20) 
+        if input_str_obj is None: return None
+        current_input_str = input_str_obj 
         stdscr.move(y + 1, x); stdscr.clrtoeol()
-
-        if not current_input_str: # User pressed Enter on empty string
+        if not current_input_str: 
             stdscr.addstr(y + 1, x, "Veuillez entrer une valeur. Réessayez.")
-            stdscr.clrtoeol()
-            stdscr.refresh()
-            time.sleep(1) # Show message briefly
-            stdscr.move(y + 1, x); stdscr.clrtoeol() # Clear message
-            continue # Retry getting string input
-
+            stdscr.clrtoeol(); stdscr.refresh(); time.sleep(1) 
+            stdscr.move(y + 1, x); stdscr.clrtoeol()
+            continue 
         try:
             val = int(current_input_str)
             valid_range = True
             if min_val is not None and val < min_val: valid_range = False
             if max_val is not None and val > max_val: valid_range = False
-            
             if not valid_range:
                 range_err_msg = ""
-                if min_val is not None and max_val is not None:
-                    range_err_msg = f" (Doit être entre {min_val} et {max_val})"
-                elif min_val is not None:
-                    range_err_msg = f" (Doit être >= {min_val})"
-                elif max_val is not None:
-                    range_err_msg = f" (Doit être <= {max_val})"
-                
+                if min_val is not None and max_val is not None: range_err_msg = f" (Doit être entre {min_val} et {max_val})"
+                elif min_val is not None: range_err_msg = f" (Doit être >= {min_val})"
+                elif max_val is not None: range_err_msg = f" (Doit être <= {max_val})"
                 stdscr.addstr(y + 1, x, f"Valeur invalide{range_err_msg}. Réessayez.")
-                stdscr.clrtoeol()
-                stdscr.refresh()
-                time.sleep(1.5) # Show error for a bit
-                stdscr.move(y + 1, x); stdscr.clrtoeol() # Clear error
-                continue # Retry input
+                stdscr.clrtoeol(); stdscr.refresh(); time.sleep(1.5) 
+                stdscr.move(y + 1, x); stdscr.clrtoeol() 
+                continue 
             return val
         except ValueError:
             stdscr.addstr(y + 1, x, "Entrée numérique invalide. Réessayez.")
-            stdscr.clrtoeol()
-            stdscr.refresh()
-            time.sleep(1.5) # Show error for a bit
-            stdscr.move(y + 1, x); stdscr.clrtoeol() # Clear error
-            continue # Retry input
+            stdscr.clrtoeol(); stdscr.refresh(); time.sleep(1.5)
+            stdscr.move(y + 1, x); stdscr.clrtoeol()
+            continue
 
 # --- Automatic Mode Functions ---
-
-# NOUVELLE FONCTION
 def _calculate_scan_positions(nx, ny, current_xlim_mm, current_ylim_mm, point_margin):
     """
     Calcule les positions de scan en serpentin à l'intérieur des limites données.
@@ -767,149 +796,98 @@ def _calculate_scan_positions(nx, ny, current_xlim_mm, current_ylim_mm, point_ma
     Retourne une liste de tuples (x, y) ou (None, message_erreur).
     """
     positions = []
-    
     if nx <= 0 or ny <= 0:
         return None, "Le nombre de points X (nx) et Y (ny) doit être positif."
 
-    # Zone effective pour le placement des centres des points de capture
     scan_area_x_min = point_margin
     scan_area_x_max = current_xlim_mm - point_margin
     scan_area_y_min = point_margin
     scan_area_y_max = current_ylim_mm - point_margin
 
-    # Vérifier si la zone de scan est valide
-    if scan_area_x_min > scan_area_x_max : # Vérification plus simple
-        if nx == 1 and current_xlim_mm >=0: # Un seul point peut être au centre
-             pass # Ok pour nx=1 si xlim >= 0, le point sera à xlim/2
-        else:
-             return None, f"Largeur X ({current_xlim_mm}mm) insuffisante pour {nx} points avec marge de {point_margin}mm."
-    
+    if scan_area_x_min > scan_area_x_max : 
+        if nx == 1 and current_xlim_mm >=0: pass 
+        else: return None, f"Largeur X ({current_xlim_mm}mm) insuffisante pour {nx} points avec marge de {point_margin}mm."
     if scan_area_y_min > scan_area_y_max :
-        if ny == 1 and current_ylim_mm >=0:
-            pass # Ok pour ny=1
-        else:
-            return None, f"Hauteur Y ({current_ylim_mm}mm) insuffisante pour {ny} points avec marge de {point_margin}mm."
+        if ny == 1 and current_ylim_mm >=0: pass 
+        else: return None, f"Hauteur Y ({current_ylim_mm}mm) insuffisante pour {ny} points avec marge de {point_margin}mm."
 
     x_coords_list = []
-    if nx == 1:
-        # Centrer le point si current_xlim_mm est défini.
-        # S'assurer que XLIM_MM n'est pas inférieur à la marge d'une manière qui rendrait le calcul illogique.
-        # Pour un seul point, le placer au centre de la zone totale XLIM_MM.
-        x_coords_list.append(current_xlim_mm / 2.0)
+    if nx == 1: x_coords_list.append(current_xlim_mm / 2.0)
     else:
         width_for_points = scan_area_x_max - scan_area_x_min
         step_x = width_for_points / (nx - 1)
-        for i in range(nx):
-            x_coords_list.append(scan_area_x_min + i * step_x)
+        for i in range(nx): x_coords_list.append(scan_area_x_min + i * step_x)
 
     y_coords_list = []
-    if ny == 1:
-        y_coords_list.append(current_ylim_mm / 2.0)
+    if ny == 1: y_coords_list.append(current_ylim_mm / 2.0)
     else:
         height_for_points = scan_area_y_max - scan_area_y_min
         step_y = height_for_points / (ny - 1)
-        for i in range(ny):
-            y_coords_list.append(scan_area_y_min + i * step_y)
+        for i in range(ny): y_coords_list.append(scan_area_y_min + i * step_y)
 
-    # Générer le chemin en serpentin
     for i_y in range(ny):
         current_y_val = y_coords_list[i_y]
-        
-        # Pour le serpentin, inverser les coordonnées x sur les lignes impaires
         current_x_row_iter = x_coords_list if i_y % 2 == 0 else reversed(x_coords_list)
-        
         for current_x_val in current_x_row_iter:
-            # S'assurer que les points sont dans les limites absolues [0, XLIM_MM] et [0, YLIM_MM]
-            # Le calcul utilisant scan_area_min/max devrait déjà garantir cela.
-            # Arrondir pour la propreté et pour éviter les problèmes de flottants minimes.
             final_x = round(max(0.0, min(current_x_val, current_xlim_mm)), 3)
             final_y = round(max(0.0, min(current_y_val, current_ylim_mm)), 3)
             positions.append((final_x, final_y))
-            
     return positions, f"{len(positions)} positions calculées avec succès."
 
 def _execute_automatic_scan(stdscr, project_path, positions_list,
                             num_y_bands, num_x_images_per_band, imgs_per_pos_at_location,
-                            base_ui_prompts, base_ui_values): # Pour référence de la hauteur de l'UI
-    """
-    Exécute la séquence de scan automatique : calibration, déplacement, capture, retour Home.
-    """
+                            base_ui_prompts, base_ui_values): 
     global current_x_mm, current_y_mm, TARGET_SPEED_MM_S, MM_PER_MICROSTEP, \
            MICROSTEPS_PER_MM, MINIMUM_PULSE_CYCLE_DELAY, HOMING_SPEED_MM_S, MAX_SPEED_MM_S
-           # Ajout de HOMING_SPEED_MM_S et MAX_SPEED_MM_S
-
     previous_cursor_visibility = curses.curs_set(0) 
-
     h, w = stdscr.getmaxyx()
     last_prompt_line_idx = 4 + len(base_ui_prompts) - 1
     status_start_line_y = last_prompt_line_idx + 2 
-
-    if status_start_line_y >= h - 6: # Garder au moins 6 lignes pour le statut/calibration/home
-        status_start_line_y = h - 6
-    if status_start_line_y < 0 : 
-        status_start_line_y = 0
+    if status_start_line_y >= h - 6: status_start_line_y = h - 6
+    if status_start_line_y < 0 : status_start_line_y = 0
     
     def _clear_status_lines(start_line, num_lines):
         for i in range(num_lines):
-            if start_line + i < h:
-                stdscr.move(start_line + i, 1); stdscr.clrtoeol()
+            if start_line + i < h: stdscr.move(start_line + i, 1); stdscr.clrtoeol()
         stdscr.refresh()
+    _clear_status_lines(status_start_line_y, 6) 
 
-    _clear_status_lines(status_start_line_y, 6) # Effacer la zone de statut
-
-    # --- 1. Calibration Initiale ---
     stdscr.move(status_start_line_y, 1); stdscr.clrtoeol()
-    stdscr.addstr(status_start_line_y, 1, "Calibration initiale en cours..."[:w-2], curses.A_BOLD)
-    stdscr.refresh()
-    
-    calibration_messages = perform_calibration_cycle() # Met à jour current_x_mm, current_y_mm
-    
-    # Afficher les messages de calibration (max 3 lignes sous le message "Calibration en cours")
+    stdscr.addstr(status_start_line_y, 1, "Calibration initiale en cours..."[:w-2], curses.A_BOLD); stdscr.refresh()
+    calibration_messages = perform_calibration_cycle() 
     for k_msg_idx, msg in enumerate(calibration_messages[:3]):
         if status_start_line_y + 1 + k_msg_idx < h:
             stdscr.move(status_start_line_y + 1 + k_msg_idx, 1); stdscr.clrtoeol()
-            stdscr.addstr(status_start_line_y + 1 + k_msg_idx, 3, msg[:w-4]) # Indenter un peu
+            stdscr.addstr(status_start_line_y + 1 + k_msg_idx, 3, msg[:w-4]) 
     stdscr.refresh()
-
     calibration_failed = any("Error" in msg or "Erreur" in msg or "failed" in msg for msg in calibration_messages)
     if calibration_failed:
         final_scan_message = "Échec de la calibration initiale. Scan annulé."
-        # Afficher le message d'échec de calibration plus bas pour ne pas écraser les détails
         error_line = status_start_line_y + 4 if status_start_line_y + 4 < h else h -1
         stdscr.move(error_line, 1); stdscr.clrtoeol()
-        stdscr.addstr(error_line, 1, final_scan_message[:w-2], curses.A_REVERSE | curses.A_BOLD)
-        stdscr.refresh()
-        time.sleep(2.5) 
-        curses.curs_set(previous_cursor_visibility)
-        return final_scan_message
+        stdscr.addstr(error_line, 1, final_scan_message[:w-2], curses.A_REVERSE | curses.A_BOLD); stdscr.refresh()
+        time.sleep(2.5); curses.curs_set(previous_cursor_visibility); return final_scan_message
     
-    # Afficher succès calibration avant de continuer (si pas d'erreur)
-    stdscr.move(status_start_line_y + 4 if status_start_line_y + 4 < h else h-1, 1); stdscr.clrtoeol() # Ligne pour message de succès calib
+    stdscr.move(status_start_line_y + 4 if status_start_line_y + 4 < h else h-1, 1); stdscr.clrtoeol() 
     stdscr.addstr(status_start_line_y + 4 if status_start_line_y + 4 < h else h-1, 1, "Calibration terminée avec succès."[:w-2], curses.A_BOLD)
-    stdscr.refresh()
-    time.sleep(1.5) # Laisser le temps de lire
-    _clear_status_lines(status_start_line_y, 6) # Effacer les messages de calibration
-    # --- Fin Calibration Initiale ---
+    stdscr.refresh(); time.sleep(1.5) 
+    _clear_status_lines(status_start_line_y, 6) 
 
     global_image_num_for_prefix = 0
     scan_aborted = False
-    final_scan_message = "Scan non complété (raison inconnue)." # Message par défaut
+    final_scan_message = "Scan non complété (raison inconnue)."
 
     for pos_idx, target_pos_coords in enumerate(positions_list):
-        _clear_status_lines(status_start_line_y, 5) # Effacer pour les nouveaux messages de cette position
-
+        _clear_status_lines(status_start_line_y, 5) 
         if status_start_line_y + 4 >= h : 
              stdscr.move(h-1, 1); stdscr.clrtoeol()
-             stdscr.addstr(h-1, 1, f"Scan {pos_idx+1}/{len(positions_list)}...", curses.A_REVERSE)
-             stdscr.refresh()
+             stdscr.addstr(h-1, 1, f"Scan {pos_idx+1}/{len(positions_list)}...", curses.A_REVERSE); stdscr.refresh()
         else: 
             target_x, target_y = target_pos_coords
             current_band_idx_for_naming = pos_idx // num_x_images_per_band
-
             stdscr.move(status_start_line_y, 1); stdscr.clrtoeol()
             move_status_msg = f"Scan {pos_idx+1}/{len(positions_list)}: Bande {current_band_idx_for_naming+1}, Pos ({target_x:.1f}, {target_y:.1f})"
-            stdscr.addstr(status_start_line_y, 1, move_status_msg[:w-2])
-            stdscr.refresh()
+            stdscr.addstr(status_start_line_y, 1, move_status_msg[:w-2]); stdscr.refresh()
 
             delta_x_to_move = target_x - current_x_mm
             delta_y_to_move = target_y - current_y_mm
@@ -919,18 +897,15 @@ def _execute_automatic_scan(stdscr, project_path, positions_list,
                 current_move_speed = TARGET_SPEED_MM_S
                 if current_move_speed <= 1e-6:
                     stdscr.move(status_start_line_y + 1, 1); stdscr.clrtoeol()
-                    stdscr.addstr(status_start_line_y + 1, 1, "Erreur: Vitesse de déplacement trop faible. Scan annulé.")
-                    stdscr.refresh()
+                    stdscr.addstr(status_start_line_y + 1, 1, "Erreur: Vitesse de déplacement trop faible. Scan annulé."); stdscr.refresh()
                     final_scan_message = "Erreur: Vitesse de déplacement trop faible. Scan annulé."
                     scan_aborted = True; break
-                
                 time_for_move_s = path_length_mm / current_move_speed
                 _dx_steps_cart = round(-delta_x_to_move * MICROSTEPS_PER_MM)
                 _dy_steps_cart = round(delta_y_to_move * MICROSTEPS_PER_MM)
                 _steps_m1 = _dx_steps_cart + _dy_steps_cart
                 _steps_m2 = _dx_steps_cart - _dy_steps_cart
                 num_iterations = max(abs(int(_steps_m1)), abs(int(_steps_m2)))
-
                 if num_iterations > 0:
                     pulse_delay = time_for_move_s / num_iterations
                     actual_pulse_delay = max(MINIMUM_PULSE_CYCLE_DELAY, pulse_delay)
@@ -938,58 +913,38 @@ def _execute_automatic_scan(stdscr, project_path, positions_list,
             
             current_x_mm = round(target_x, 3)
             current_y_mm = round(target_y, 3)
-
             stdscr.move(status_start_line_y + 1, 1); stdscr.clrtoeol()
             capture_info_msg = f"  Capture de {imgs_per_pos_at_location} image(s) à (X:{current_x_mm:.1f}, Y:{current_y_mm:.1f})"
-            stdscr.addstr(status_start_line_y + 1, 1, capture_info_msg[:w-2])
-            stdscr.refresh()
-
+            stdscr.addstr(status_start_line_y + 1, 1, capture_info_msg[:w-2]); stdscr.refresh()
             filename_prefix = f"B{current_band_idx_for_naming:02d}_Im{global_image_num_for_prefix:02d}"
             base_path_for_this_capture = os.path.join(project_path, filename_prefix)
             capture_output_msgs = capture_images(imgs_per_pos_at_location, base_path_for_this_capture)
-            
             for k_msg_idx in range(min(2, len(capture_output_msgs))):
                 if status_start_line_y + 2 + k_msg_idx < h:
                     stdscr.move(status_start_line_y + 2 + k_msg_idx, 1); stdscr.clrtoeol()
                     stdscr.addstr(status_start_line_y + 2 + k_msg_idx, 3, capture_output_msgs[k_msg_idx][:w-4])
             stdscr.refresh()
-
             critical_capture_error = False
             for msg in capture_output_msgs:
                 if "Erreur" in msg and "Résolution" not in msg and "directory" not in msg and "Impossible d'ouvrir la webcam" not in msg:
                     critical_capture_error = True; break
-                if "Impossible d'ouvrir la webcam" in msg:
-                    critical_capture_error = True; break
-
+                if "Impossible d'ouvrir la webcam" in msg: critical_capture_error = True; break
             if critical_capture_error:
                 final_scan_message = "Erreur critique de capture. Scan interrompu."
                 scan_aborted = True; break
-            
-            global_image_num_for_prefix += 1
-            time.sleep(0.1)
-
-            stdscr.nodelay(True)
-            key_press = stdscr.getch()
-            stdscr.nodelay(False)
-            if key_press == 27: # ESC
-                final_scan_message = "Scan interrompu par l'utilisateur."
-                scan_aborted = True; break
+            global_image_num_for_prefix += 1; time.sleep(0.1)
+            stdscr.nodelay(True); key_press = stdscr.getch(); stdscr.nodelay(False)
+            if key_press == 27: final_scan_message = "Scan interrompu par l'utilisateur."; scan_aborted = True; break
     
-    if not scan_aborted: # Si la boucle s'est terminée sans interruption ni erreur
-        final_scan_message = "Scan des positions terminé avec succès."
+    if not scan_aborted: final_scan_message = "Scan des positions terminé avec succès."
+    _clear_status_lines(status_start_line_y, 6) 
 
-    _clear_status_lines(status_start_line_y, 6) # Effacer les messages du dernier point du scan
-
-    # --- 2. Retour au Point Home (0,0) ---
     stdscr.move(status_start_line_y, 1); stdscr.clrtoeol()
-    stdscr.addstr(status_start_line_y, 1, "Retour au point HOME (0,0)..."[:w-2], curses.A_BOLD)
-    stdscr.refresh()
-
+    stdscr.addstr(status_start_line_y, 1, "Retour au point HOME (0,0)..."[:w-2], curses.A_BOLD); stdscr.refresh()
     target_x_home, target_y_home = 0.0, 0.0
     delta_x_to_home = target_x_home - current_x_mm
     delta_y_to_home = target_y_home - current_y_mm
     home_path_len = math.sqrt(delta_x_to_home**2 + delta_y_to_home**2)
-
     if home_path_len >= (MM_PER_MICROSTEP / 2.0) :
         homing_speed_actual = min(HOMING_SPEED_MM_S, MAX_SPEED_MM_S) 
         if homing_speed_actual <= 1e-6:
@@ -999,38 +954,183 @@ def _execute_automatic_scan(stdscr, project_path, positions_list,
             time_for_home_move = home_path_len / homing_speed_actual
             _dx_steps_cart_h = round(-delta_x_to_home * MICROSTEPS_PER_MM)
             _dy_steps_cart_h = round(delta_y_to_home * MICROSTEPS_PER_MM)
-            _steps_m1_h = _dx_steps_cart_h + _dy_steps_cart_h
-            _steps_m2_h = _dy_steps_cart_h - _dx_steps_cart_h # Correction ici pour CoreXY
-            num_iter_h = max(abs(int(_steps_m1_h)), abs(int(_steps_m2_h)))
+            # _steps_m1_h = _dx_steps_cart_h + _dy_steps_cart_h # Original
+            # _steps_m2_h = _dy_steps_cart_h - _dx_steps_cart_h # Correction ici pour CoreXY -> Non, c'est dans move_corexy
+                                                              # move_corexy attend les deltas cartésiens
+            # La logique de conversion des deltas cartésiens en steps moteur est dans move_corexy
+            num_iter_h = max(abs(int(round(-delta_x_to_home * MICROSTEPS_PER_MM) + round(delta_y_to_home * MICROSTEPS_PER_MM))), 
+                               abs(int(round(-delta_x_to_home * MICROSTEPS_PER_MM) - round(delta_y_to_home * MICROSTEPS_PER_MM))))
+
             if num_iter_h > 0:
                 pulse_delay_h = time_for_home_move / num_iter_h
                 actual_pulse_delay_h = max(MINIMUM_PULSE_CYCLE_DELAY, pulse_delay_h)
-                # On utilise move_corexy qui gère la mise à jour de current_x_mm et current_y_mm
                 move_corexy(delta_x_to_home, delta_y_to_home, actual_pulse_delay_h)
-    else: 
-        current_x_mm, current_y_mm = round(target_x_home,3), round(target_y_home,3)
-
+    else: current_x_mm, current_y_mm = round(target_x_home,3), round(target_y_home,3)
     stdscr.move(status_start_line_y + 1, 1); stdscr.clrtoeol()
-    stdscr.addstr(status_start_line_y + 1, 1, f"Retour HOME terminé. Pos: X={current_x_mm:.1f}, Y={current_y_mm:.1f}"[:w-2])
-    stdscr.refresh()
+    stdscr.addstr(status_start_line_y + 1, 1, f"Retour HOME terminé. Pos: X={current_x_mm:.1f}, Y={current_y_mm:.1f}"[:w-2]); stdscr.refresh()
     time.sleep(1.5) 
-    # --- Fin Retour Home ---
     
-    # Afficher le message final global du scan (qui a été défini par la boucle ou calibration)
     final_display_line = status_start_line_y + 3
     if final_display_line < h:
         stdscr.move(final_display_line, 1); stdscr.clrtoeol()
         stdscr.addstr(final_display_line, 1, final_scan_message[:w-2], curses.A_BOLD)
-    else: # Fallback si écran trop petit
+    else: 
         stdscr.move(h-1,1); stdscr.clrtoeol()
         stdscr.addstr(h-1,1, final_scan_message[:w-2], curses.A_BOLD)
     stdscr.refresh()
-    
-    curses.curs_set(previous_cursor_visibility)
-    return final_scan_message
+    curses.curs_set(previous_cursor_visibility); return final_scan_message
 
 def draw_automatic_mode_ui(stdscr, title, prompts, current_values, status_message="", help_message=""):
-    """Draws the UI for the automatic mode."""
+    stdscr.clear(); h, w = stdscr.getmaxyx()
+    stdscr.addstr(1, (w - len(title)) // 2, title, curses.A_BOLD)
+    stdscr.addstr(2, (w - len(title)) // 2, "-" * len(title))
+    line_y = 4
+    for i, prompt_key in enumerate(prompts): 
+        val_str = str(current_values.get(prompt_key, "..."))
+        display_str = f"{prompt_key}: {val_str}" 
+        stdscr.addstr(line_y + i, 2, display_str[:w-3])
+    status_line_y = h - 4 
+    if error_msg_line_explicit: status_line_y = h -5 
+    if status_message:
+        is_error = "erreur" in status_message.lower() or "impossible" in status_message.lower() or "échec" in status_message.lower()
+        msg_y = h - 4 if is_error else h - 3
+        stdscr.move(msg_y,1); stdscr.clrtoeol() 
+        stdscr.addstr(msg_y, 1, status_message[:w-2], curses.A_REVERSE if is_error else curses.A_NORMAL)
+    stdscr.move(h-2,1); stdscr.clrtoeol() 
+    if help_message: stdscr.addstr(h - 2, 1, help_message[:w-2])
+    else: stdscr.addstr(h - 2, 1, "ESC pour retourner au menu principal."[:w-2])
+    stdscr.refresh()
+error_msg_line_explicit = False 
+
+def _automatic_mode_loop(stdscr):
+    global XLIM_MM, YLIM_MM, POINT_MARGIN_MM 
+    curses.curs_set(1); stdscr.keypad(True) 
+    project_name = ""; project_path = ""
+    num_x_points = None; num_y_points = None
+    images_per_position = None; calculated_positions = [] 
+    current_stage_idx = 0
+    stages = ["GET_PROJECT_NAME", "GET_NUM_Y", "GET_NUM_X", 
+              "GET_IMAGES_PER_POS", "CONFIRM_PARAMETERS", 
+              "CALCULATE_POSITIONS", "READY_TO_EXECUTE"]
+    config_values = {}; status_msg = "Initialisation du mode automatique..."; help_text_current = "Entrez les informations. ESC pour annuler."
+
+    while True:
+        current_stage = stages[current_stage_idx]
+        prompt_keys_ordered = ["Nom du Projet", "Chemin du Projet", "Bandes (ny)", "Images par bande (nx)", "Images par Position", "Total Positions"]
+        ui_values = {
+            "Nom du Projet": project_name if project_name else "...",
+            "Chemin du Projet": project_path if project_path else "...",
+            "Bandes (ny)": str(num_y_points) if num_y_points is not None else "...", 
+            "Images par bande (nx)": str(num_x_points) if num_x_points is not None else "...", 
+            "Images par Position": str(images_per_position) if images_per_position is not None else "...",
+            "Total Positions": str(num_x_points * num_y_points) if num_x_points is not None and num_y_points is not None else "..."
+        }
+        draw_automatic_mode_ui(stdscr, "-- Mode Automatique --", prompt_keys_ordered, ui_values, status_msg, help_text_current)
+        input_y_offset = len(prompt_keys_ordered) + 5 
+
+        if current_stage == "GET_PROJECT_NAME":
+            help_text_current = "Entrez le nom du projet et validez avec Entrée. ESC pour annuler."
+            status_msg = "Configuration du projet..."
+            draw_automatic_mode_ui(stdscr, "-- Mode Automatique --", prompt_keys_ordered, ui_values, status_msg, help_text_current)
+            temp_name = _get_string_input_curses(stdscr, input_y_offset, 2, "Nom du Projet: ")
+            if temp_name is None: status_msg = "Annulation..."; time.sleep(0.5); break 
+            if not temp_name: status_msg = "Erreur: Le nom du projet ne peut pas être vide. Réessayez."; continue
+            project_name = temp_name; timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            project_folder_name = f"{project_name.replace(' ', '_')}_{timestamp}" 
+            project_path = os.path.join(".", project_folder_name) 
+            try:
+                os.makedirs(project_path, exist_ok=True)
+                status_msg = f"Dossier projet créé: {project_path}"
+                config_values["project_name"] = project_name; config_values["project_path"] = project_path
+                current_stage_idx += 1
+            except OSError as e: status_msg = f"Erreur création dossier {project_path}: {e}"; project_name = ""; project_path = ""; 
+
+        elif current_stage == "GET_NUM_Y": 
+            help_text_current = "Nombre de bandes de scan sur l'axe Y. ESC pour annuler." 
+            status_msg = "Configuration de la grille de scan..."
+            draw_automatic_mode_ui(stdscr, "-- Mode Automatique --", prompt_keys_ordered, ui_values, status_msg, help_text_current)
+            temp_ny = _get_int_input_curses(stdscr, input_y_offset, 2, "Bandes (ny) (ex: 4): ", min_val=1) 
+            if temp_ny is None: status_msg = "Annulation..."; time.sleep(0.5); break
+            num_y_points = temp_ny; config_values["num_y_points"] = num_y_points; current_stage_idx += 1
+            
+        elif current_stage == "GET_NUM_X": 
+            help_text_current = "Nombre d'images à prendre par bande (sur l'axe X). ESC pour annuler." 
+            status_msg = "Configuration de la grille de scan..."
+            draw_automatic_mode_ui(stdscr, "-- Mode Automatique --", prompt_keys_ordered, ui_values, status_msg, help_text_current)
+            temp_nx = _get_int_input_curses(stdscr, input_y_offset, 2, "Images par bande (nx) (ex: 5): ", min_val=1) 
+            if temp_nx is None: status_msg = "Annulation..."; time.sleep(0.5); break
+            num_x_points = temp_nx; config_values["num_x_points"] = num_x_points; current_stage_idx += 1
+
+        elif current_stage == "GET_IMAGES_PER_POS":
+            help_text_current = "Nombre de captures d'images à chaque position. ESC pour annuler."
+            status_msg = "Configuration de la capture..."
+            draw_automatic_mode_ui(stdscr, "-- Mode Automatique --", prompt_keys_ordered, ui_values, status_msg, help_text_current)
+            temp_imgs = _get_int_input_curses(stdscr, input_y_offset, 2, "Images par Position (ex: 1): ", min_val=1)
+            if temp_imgs is None: status_msg = "Annulation..."; time.sleep(0.5); break
+            images_per_position = temp_imgs; config_values["images_per_position"] = images_per_position; current_stage_idx += 1
+
+        elif current_stage == "CONFIRM_PARAMETERS":
+            total_pos_str = ui_values["Total Positions"]
+            status_msg = f"Vérifiez les paramètres ({total_pos_str} positions au total)."
+            help_text_current = "'Entrée' pour valider et calculer les positions. 'ESC' pour annuler."
+            draw_automatic_mode_ui(stdscr, "-- Mode Automatique --", prompt_keys_ordered, ui_values, status_msg, help_text_current)
+            stdscr.nodelay(False); key = stdscr.getch()
+            if key == 27: status_msg = "Annulation..."; time.sleep(0.5); break
+            elif key == curses.KEY_ENTER or key in [10, 13]:
+                status_msg = "Paramètres confirmés. Calcul des positions..."; current_stage_idx += 1 
+            
+        elif current_stage == "CALCULATE_POSITIONS":
+            status_msg = "Calcul en cours..."; help_text_current = "Veuillez patienter."
+            draw_automatic_mode_ui(stdscr, "-- Mode Automatique --", prompt_keys_ordered, ui_values, status_msg, help_text_current)
+            time.sleep(0.1) 
+            calculated_positions, calc_msg = _calculate_scan_positions(num_x_points, num_y_points, XLIM_MM, YLIM_MM, POINT_MARGIN_MM)
+            if calculated_positions is None:
+                status_msg = calc_msg 
+                help_text_current = "Erreur de calcul. Appuyez sur ESC et vérifiez les limites/points."
+                draw_automatic_mode_ui(stdscr, "-- Mode Automatique --", prompt_keys_ordered, ui_values, status_msg, help_text_current)
+                while True:
+                    if stdscr.getch() == 27: break
+                status_msg = "Annulation suite à erreur de calcul..."; time.sleep(0.5); break
+            else:
+                config_values["calculated_positions"] = calculated_positions; csv_feedback_msg = ""
+                if project_path: 
+                    csv_file_path = os.path.join(project_path, "position_list.csv")
+                    try:
+                        with open(csv_file_path, 'w', newline='') as csvfile:
+                            csv_writer = csv.writer(csvfile)
+                            csv_writer.writerow(['X_mm', 'Y_mm', 'n_img']) 
+                            for pos_x, pos_y in calculated_positions:
+                                csv_writer.writerow([pos_x, pos_y, images_per_position])
+                        csv_feedback_msg = " position_list.csv sauvegardé."
+                    except IOError as e: csv_feedback_msg = f" Erreur sauvegarde CSV: {e}."
+                else: csv_feedback_msg = " Erreur: Chemin du projet non défini pour CSV."
+                status_msg = calc_msg + csv_feedback_msg; current_stage_idx += 1 
+        
+        elif current_stage == "READY_TO_EXECUTE":
+            help_text_current = "'Entrée' pour lancer la séquence. 'ESC' pour retourner au menu."
+            draw_automatic_mode_ui(stdscr, "-- Mode Automatique --", prompt_keys_ordered, ui_values, status_msg, help_text_current)
+            stdscr.nodelay(False); key = stdscr.getch()
+            if key == 27: 
+                status_msg = "Séquence annulée avant démarrage."; 
+                draw_automatic_mode_ui(stdscr, "-- Mode Automatique --", prompt_keys_ordered, ui_values, status_msg, "Retour au menu...")
+                time.sleep(1); break
+            elif key == curses.KEY_ENTER or key in [10, 13]:
+                status_msg = "Lancement de la séquence de scan..."
+                draw_automatic_mode_ui(stdscr, "-- Mode Automatique --", prompt_keys_ordered, ui_values, status_msg, "Scan en cours... ESC pour interrompre.")
+                time.sleep(0.5)
+                scan_result_msg = _execute_automatic_scan(stdscr, project_path, calculated_positions, num_y_points, num_x_points, images_per_position, prompt_keys_ordered, ui_values)
+                status_msg = scan_result_msg; help_text_current = "Appuyez sur une touche pour retourner au menu."
+                draw_automatic_mode_ui(stdscr, "-- Mode Automatique --", prompt_keys_ordered, ui_values, status_msg, help_text_current)
+                stdscr.nodelay(False); stdscr.getch(); break 
+    curses.curs_set(0); stdscr.keypad(True)
+    return_message = f"Mode Auto: {project_name}" if project_name else "Mode Auto quitté/annulé."
+    if calculated_positions and project_name: return_message += f" ({len(calculated_positions)} positions)"
+    return return_message
+
+
+# --- NEW: Load File Mode Functions ---
+def draw_load_file_ui(stdscr, title, info_dict, status_message="", help_message=""):
+    """Draws the UI for the load file mode."""
     stdscr.clear()
     h, w = stdscr.getmaxyx()
 
@@ -1038,247 +1138,390 @@ def draw_automatic_mode_ui(stdscr, title, prompts, current_values, status_messag
     stdscr.addstr(1, (w - len(title)) // 2, title, curses.A_BOLD)
     stdscr.addstr(2, (w - len(title)) // 2, "-" * len(title))
 
-    # Prompts and current values
+    # Info display
     line_y = 4
-    for i, prompt_key in enumerate(prompts): # prompts is now a list of keys
-        val_str = str(current_values.get(prompt_key, "..."))
-        display_str = f"{prompt_key}: {val_str}" # Use key directly for display
+    for i, (key, value) in enumerate(info_dict.items()):
+        display_str = f"{key}: {str(value)}"
         stdscr.addstr(line_y + i, 2, display_str[:w-3])
 
     # Status Message
-    status_line_y = h - 4 # Ligne pour le statut (au-dessus de l'erreur et de l'aide)
-    if error_msg_line_explicit: status_line_y = h -5 # Ajuster si ligne d'erreur dédiée
-    
-    # Error Message (if any, displayed separately)
-    # Note: error_msg logic needs to be handled in _automatic_mode_loop to use a specific line
-    # For now, status_message can contain errors.
-
     if status_message:
-        # Si le message de statut est une erreur, l'afficher sur une ligne dédiée (h-4)
-        # Sinon, l'afficher sur (h-3)
-        is_error = "erreur" in status_message.lower() or "impossible" in status_message.lower()
-        msg_y = h - 4 if is_error else h - 3
-        stdscr.move(msg_y,1); stdscr.clrtoeol() # Clear previous message on that line
+        is_error = "erreur" in status_message.lower() or \
+                   "impossible" in status_message.lower() or \
+                   "échec" in status_message.lower() or \
+                   "non trouvé" in status_message.lower()
+        msg_y = h - 4 if is_error else h - 3 # one line for help, one for status/error
+        stdscr.move(msg_y, 1); stdscr.clrtoeol()
         stdscr.addstr(msg_y, 1, status_message[:w-2], curses.A_REVERSE if is_error else curses.A_NORMAL)
     
     # Help Message
-    stdscr.move(h-2,1); stdscr.clrtoeol() # Clear previous help message
+    stdscr.move(h - 2, 1); stdscr.clrtoeol()
     if help_message:
-         stdscr.addstr(h - 2, 1, help_message[:w-2])
-    else: # Default help message
+        stdscr.addstr(h - 2, 1, help_message[:w-2])
+    else: # Default help
         stdscr.addstr(h - 2, 1, "ESC pour retourner au menu principal."[:w-2])
 
     stdscr.refresh()
-error_msg_line_explicit = False # Global or part of a class state if we need more complex error display
 
-def _automatic_mode_loop(stdscr):
-    """Main loop for the Automatic Mode UI and logic."""
-    global XLIM_MM, YLIM_MM, POINT_MARGIN_MM # Access global machine limits & margin
+def _parse_csv_file(file_path_str):
+    """
+    Parses the CSV file expecting 'X_mm', 'Y_mm', 'n_img' headers.
+    Returns (list_of_positions, error_message_or_none).
+    Each item in list_of_positions is a dict: {'x': float, 'y': float, 'n_img': int}.
+    """
+    positions = []
+    expected_headers = ['X_mm', 'Y_mm', 'n_img']
+    try:
+        with open(file_path_str, mode='r', newline='', encoding='utf-8') as csvfile:
+            reader = csv.DictReader(csvfile)
+            if not reader.fieldnames or not all(h in reader.fieldnames for h in expected_headers):
+                return None, f"Erreur: En-têtes CSV incorrects. Attendu: {', '.join(expected_headers)}. Trouvé: {', '.join(reader.fieldnames or [])}"
 
-    curses.curs_set(1) 
-    stdscr.keypad(True) 
+            for i, row in enumerate(reader):
+                try:
+                    x_mm = float(row['X_mm'])
+                    y_mm = float(row['Y_mm'])
+                    n_img = int(row['n_img'])
+                    if n_img <= 0:
+                        return None, f"Erreur ligne {i+2}: n_img doit être positif (reçu {n_img})."
+                    positions.append({'x': x_mm, 'y': y_mm, 'n_img': n_img})
+                except ValueError as ve:
+                    return None, f"Erreur conversion ligne {i+2}: {ve}. Vérifiez les valeurs numériques."
+                except KeyError as ke:
+                    return None, f"Erreur ligne {i+2}: Colonne manquante {ke}."
+        if not positions:
+            return None, "Erreur: Fichier CSV vide ou aucune donnée valide trouvée."
+        return positions, f"{len(positions)} positions chargées depuis {os.path.basename(file_path_str)}."
+    except FileNotFoundError:
+        return None, f"Erreur: Fichier CSV '{file_path_str}' non trouvé."
+    except Exception as e:
+        return None, f"Erreur lecture CSV '{file_path_str}': {e}"
+
+def _execute_csv_scan(stdscr, project_path, positions_data_list, base_ui_info, title_for_ui):
+    """
+    Executes the scan based on loaded CSV data: calibration, move to points, capture, return Home.
+    base_ui_info is a dictionary of fixed info to display (like project name, file name).
+    title_for_ui is the main title for the UI drawing function.
+    """
+    global current_x_mm, current_y_mm, TARGET_SPEED_MM_S, XLIM_MM, YLIM_MM, \
+           MM_PER_MICROSTEP, MICROSTEPS_PER_MM, MINIMUM_PULSE_CYCLE_DELAY, \
+           HOMING_SPEED_MM_S, MAX_SPEED_MM_S
+
+    previous_cursor_visibility = curses.curs_set(0)
+    h, w = stdscr.getmaxyx()
     
+    # Determine where status messages start based on how much fixed info we have
+    status_start_line_y = 4 + len(base_ui_info) + 1 # Title, separator, info items, separator for status
+
+    def _clear_and_show_status(lines_to_display, is_progress_bar=False):
+        # Clear previous status lines (e.g., 5 lines for status)
+        for i in range(5): # Max 5 lines for status updates
+            if status_start_line_y + i < h:
+                stdscr.move(status_start_line_y + i, 1); stdscr.clrtoeol()
+        
+        # Display new status lines
+        for i, line_text in enumerate(lines_to_display[:5]): # Show up to 5 lines
+             if status_start_line_y + i < h:
+                line_attr = curses.A_NORMAL
+                if "Erreur" in line_text or "Échec" in line_text: line_attr = curses.A_REVERSE | curses.A_BOLD
+                elif "Calibration" in line_text or "Terminé" in line_text or "Retour HOME" in line_text : line_attr = curses.A_BOLD
+                stdscr.addstr(status_start_line_y + i, 1, line_text[:w-2], line_attr)
+        stdscr.refresh()
+
+    # --- 1. Initial UI Draw ---
+    draw_load_file_ui(stdscr, title_for_ui, base_ui_info, "Préparation du scan...", "ESC pour interrompre à tout moment.")
+    
+    # --- 2. Calibration Initiale ---
+    _clear_and_show_status(["Calibration initiale en cours..."])
+    calibration_messages = perform_calibration_cycle() # Updates current_x_mm, current_y_mm
+
+    _clear_and_show_status(["Calibration initiale en cours..."] + [f"  {m}" for m in calibration_messages[:3]]) # Show first few messages
+
+    calibration_failed = any("Error" in msg or "Erreur" in msg or "failed" in msg for msg in calibration_messages)
+    if calibration_failed:
+        final_scan_message = "Échec de la calibration initiale. Scan annulé."
+        _clear_and_show_status(calibration_messages + [final_scan_message])
+        time.sleep(3)
+        curses.curs_set(previous_cursor_visibility)
+        return final_scan_message
+    
+    _clear_and_show_status(["Calibration terminée avec succès.", f"  Position: X={current_x_mm:.1f}, Y={current_y_mm:.1f}"])
+    time.sleep(1.5)
+
+    scan_aborted_by_user = False
+    final_scan_message = "Scan par fichier CSV non complété." # Default
+
+    for point_idx, point_data in enumerate(positions_data_list):
+        target_x_csv = point_data['x']
+        target_y_csv = point_data['y']
+        num_images_at_pos = point_data['n_img']
+
+        # --- Check for ESC press ---
+        stdscr.nodelay(True); key_press = stdscr.getch(); stdscr.nodelay(False)
+        if key_press == 27: # ESC
+            final_scan_message = "Scan interrompu par l'utilisateur."
+            scan_aborted_by_user = True; break
+        
+        _clear_and_show_status([
+            f"Point {point_idx+1}/{len(positions_data_list)}: Cible CSV ({target_x_csv:.1f}, {target_y_csv:.1f})",
+            f"  Position actuelle: ({current_x_mm:.1f}, {current_y_mm:.1f})"
+        ])
+
+        # --- Clamp Coordinates ---
+        actual_target_x_mm = max(0.0, min(target_x_csv, XLIM_MM))
+        actual_target_y_mm = max(0.0, min(target_y_csv, YLIM_MM))
+        clamped_msg = ""
+        if abs(actual_target_x_mm - target_x_csv) > 1e-9 or abs(actual_target_y_mm - target_y_csv) > 1e-9:
+            clamped_msg = f"  Avertissement: Cible clampée à ({actual_target_x_mm:.1f}, {actual_target_y_mm:.1f})"
+            _clear_and_show_status([
+                f"Point {point_idx+1}/{len(positions_data_list)}: Cible CSV ({target_x_csv:.1f}, {target_y_csv:.1f})",
+                clamped_msg,
+                "Déplacement en cours..."
+            ])
+        else:
+             _clear_and_show_status([
+                f"Point {point_idx+1}/{len(positions_data_list)}: Vers ({actual_target_x_mm:.1f}, {actual_target_y_mm:.1f})",
+                "Déplacement en cours..."
+            ])
+
+
+        # --- Move to Position ---
+        delta_x_to_move = actual_target_x_mm - current_x_mm
+        delta_y_to_move = actual_target_y_mm - current_y_mm
+        path_length_mm = math.sqrt(delta_x_to_move**2 + delta_y_to_move**2)
+
+        if path_length_mm >= (MM_PER_MICROSTEP / 2.0):
+            current_move_speed = TARGET_SPEED_MM_S
+            if current_move_speed <= 1e-6:
+                final_scan_message = "Erreur: Vitesse de déplacement trop faible. Scan annulé."
+                _clear_and_show_status([final_scan_message]); time.sleep(2); scan_aborted_by_user = True; break
+            
+            time_for_move_s = path_length_mm / current_move_speed
+            # CoreXY conversion is inside move_corexy
+            dx_steps_cart = round(-delta_x_to_move * MICROSTEPS_PER_MM)
+            dy_steps_cart = round(delta_y_to_move * MICROSTEPS_PER_MM)
+            num_iterations = max(abs(int(dx_steps_cart + dy_steps_cart)), abs(int(dx_steps_cart - dy_steps_cart)))
+
+            if num_iterations > 0:
+                pulse_delay = time_for_move_s / num_iterations
+                actual_pulse_delay = max(MINIMUM_PULSE_CYCLE_DELAY, pulse_delay)
+                move_corexy(delta_x_to_move, delta_y_to_move, actual_pulse_delay) # Updates current_x_mm, current_y_mm
+        else: # Already at or very close to target, just update logical
+            current_x_mm = round(actual_target_x_mm, 3)
+            current_y_mm = round(actual_target_y_mm, 3)
+        
+        _clear_and_show_status([
+            f"Point {point_idx+1}/{len(positions_data_list)}: Atteint ({current_x_mm:.1f}, {current_y_mm:.1f})",
+            f"  Capture de {num_images_at_pos} image(s)..."
+        ])
+        
+        # --- Capture Images ---
+        # Naming: ProjectName/P000_Id00.tiff, P000_Id01.tiff ... P001_Id00.tiff
+        filename_prefix_for_capture = f"P{point_idx:03d}" 
+        base_path_for_this_capture = os.path.join(project_path, filename_prefix_for_capture)
+        
+        capture_output_msgs = capture_images(num_images_at_pos, base_path_for_this_capture)
+        
+        # Display first few capture messages
+        capture_status_lines = [
+            f"Point {point_idx+1}/{len(positions_data_list)}: Capture à ({current_x_mm:.1f}, {current_y_mm:.1f})",
+        ] + [f"    {m}" for m in capture_output_msgs[:2]]
+        
+        critical_capture_error = False
+        for msg in capture_output_msgs:
+            if "Erreur" in msg and "Résolution" not in msg and "directory" not in msg and "Impossible d'ouvrir la webcam" not in msg:
+                critical_capture_error = True; break
+            if "Impossible d'ouvrir la webcam" in msg: critical_capture_error = True; break
+        
+        if critical_capture_error:
+            final_scan_message = f"Erreur critique de capture au point {point_idx+1}. Scan interrompu."
+            capture_status_lines.append(final_scan_message)
+            _clear_and_show_status(capture_status_lines); time.sleep(2)
+            scan_aborted_by_user = True; break # Treat as abortion
+        
+        _clear_and_show_status(capture_status_lines)
+        time.sleep(0.2) # Brief pause after each point's capture messages
+
+    if not scan_aborted_by_user:
+        final_scan_message = "Scan par fichier CSV terminé avec succès."
+
+    _clear_and_show_status([final_scan_message, "Retour au point HOME (0,0)..."])
+
+    # --- Return to Home (0,0) ---
+    target_x_home, target_y_home = 0.0, 0.0
+    delta_x_to_home = target_x_home - current_x_mm
+    delta_y_to_home = target_y_home - current_y_mm
+    home_path_len = math.sqrt(delta_x_to_home**2 + delta_y_to_home**2)
+
+    if home_path_len >= (MM_PER_MICROSTEP / 2.0) :
+        homing_speed_actual = min(HOMING_SPEED_MM_S, MAX_SPEED_MM_S)
+        if homing_speed_actual <= 1e-6:
+             _clear_and_show_status([final_scan_message, "Erreur: Vitesse de retour HOME trop faible."])
+        else:
+            time_for_home_move = home_path_len / homing_speed_actual
+            # Deltas are already cartesian for move_corexy
+            dx_steps_cart_h = round(-delta_x_to_home * MICROSTEPS_PER_MM)
+            dy_steps_cart_h = round(delta_y_to_home * MICROSTEPS_PER_MM)
+            num_iter_h = max(abs(int(dx_steps_cart_h + dy_steps_cart_h)), abs(int(dx_steps_cart_h - dy_steps_cart_h)))
+            if num_iter_h > 0:
+                pulse_delay_h = time_for_home_move / num_iter_h
+                actual_pulse_delay_h = max(MINIMUM_PULSE_CYCLE_DELAY, pulse_delay_h)
+                move_corexy(delta_x_to_home, delta_y_to_home, actual_pulse_delay_h) # updates current_x/y
+    else: # Already home or very close
+        current_x_mm, current_y_mm = round(target_x_home,3), round(target_y_home,3)
+
+    _clear_and_show_status([final_scan_message, f"Retour HOME terminé. Pos: X={current_x_mm:.1f}, Y={current_y_mm:.1f}"])
+    time.sleep(1.5)
+    
+    curses.curs_set(previous_cursor_visibility)
+    return final_scan_message
+
+
+def _load_file_mode_loop(stdscr):
+    """Main loop for the Load File Mode UI and logic."""
+    global XLIM_MM, YLIM_MM # Access global machine limits
+
+    curses.curs_set(1)
+    stdscr.keypad(True)
+    
+    csv_file_path_str = ""
     project_name = ""
-    project_path = ""
-    # Les variables internes peuvent garder des noms techniques clairs
-    num_x_points = None # Correspond à "Images par bande (nx)" pour l'utilisateur
-    num_y_points = None # Correspond à "Bandes (ny)" pour l'utilisateur
-    images_per_position = None
-    calculated_positions = [] 
+    project_path_created = "" # Actual path to the created project folder
+    loaded_positions_data = []
     
     current_stage_idx = 0
-    stages = ["GET_PROJECT_NAME", "GET_NUM_Y", "GET_NUM_X", # Ordre modifié : Bandes (ny) puis Images/bande (nx)
-              "GET_IMAGES_PER_POS", "CONFIRM_PARAMETERS", 
-              "CALCULATE_POSITIONS", "READY_TO_EXECUTE"]
+    # Stages: Get CSV path, Parse CSV, Get Project Name, Confirm, Execute
+    stages = ["GET_CSV_PATH", "PARSE_CSV", "GET_PROJECT_NAME", "CONFIRM_AND_EXECUTE"]
+    
+    status_msg = "Initialisation du mode Charger Fichier..."
+    help_text_current = "Entrez le chemin du fichier CSV. ESC pour annuler."
 
-    config_values = {} 
-    status_msg = "Initialisation du mode automatique..."
-    help_text_current = "Entrez les informations. ESC pour annuler."
+    # This dictionary will hold info to display on the UI
+    ui_info = {
+        "Fichier CSV": "Non défini",
+        "Nom du Projet": "Non défini",
+        "Points Chargés": "0"
+    }
+    title = "-- Charger Fichier CSV --"
 
     while True:
         current_stage = stages[current_stage_idx]
+        draw_load_file_ui(stdscr, title, ui_info, status_msg, help_text_current)
         
-        # --- RENOMMAGE DES INVITES UTILISATEUR ---
-        prompt_keys_ordered = [
-            "Nom du Projet", "Chemin du Projet",
-            "Bandes (ny)", "Images par bande (nx)", # MODIFIÉ
-            "Images par Position", "Total Positions"
-        ]
-        
-        ui_values = {
-            "Nom du Projet": project_name if project_name else "...",
-            "Chemin du Projet": project_path if project_path else "...",
-            "Bandes (ny)": str(num_y_points) if num_y_points is not None else "...", # MODIFIÉ
-            "Images par bande (nx)": str(num_x_points) if num_x_points is not None else "...", # MODIFIÉ
-            "Images par Position": str(images_per_position) if images_per_position is not None else "...",
-            "Total Positions": str(num_x_points * num_y_points) if num_x_points is not None and num_y_points is not None else "..."
-        }
+        # Input line y starts after title, separator, and ui_info items
+        input_y_offset = 4 + len(ui_info) 
 
-        draw_automatic_mode_ui(stdscr, "-- Mode Automatique --", prompt_keys_ordered, ui_values, status_msg, help_text_current)
-        
-        input_y_offset = len(prompt_keys_ordered) + 5 
+        if current_stage == "GET_CSV_PATH":
+            help_text_current = "Chemin vers fichier CSV (ex: ./scan.csv). ESC pour annuler."
+            status_msg = "Attente du chemin du fichier CSV..."
+            draw_load_file_ui(stdscr, title, ui_info, status_msg, help_text_current) # Redraw with current messages
 
-        if current_stage == "GET_PROJECT_NAME":
-            help_text_current = "Entrez le nom du projet et validez avec Entrée. ESC pour annuler."
-            status_msg = "Configuration du projet..."
-            draw_automatic_mode_ui(stdscr, "-- Mode Automatique --", prompt_keys_ordered, ui_values, status_msg, help_text_current)
-
-            temp_name = _get_string_input_curses(stdscr, input_y_offset, 2, "Nom du Projet: ")
-            if temp_name is None: status_msg = "Annulation..."; time.sleep(0.5); break 
-            if not temp_name:
-                status_msg = "Erreur: Le nom du projet ne peut pas être vide. Réessayez."
+            temp_path = _get_string_input_curses(stdscr, input_y_offset, 2, "Chemin Fichier CSV: ", max_len=100)
+            if temp_path is None: # ESC pressed
+                status_msg = "Annulation..."; draw_load_file_ui(stdscr, title, ui_info, status_msg, "Retour au menu..."); time.sleep(0.5); break
+            
+            if not temp_path.lower().endswith(".csv"):
+                status_msg = "Erreur: Le fichier doit avoir une extension .csv. Réessayez."
                 continue
+            if not os.path.exists(temp_path):
+                status_msg = f"Erreur: Fichier '{temp_path}' non trouvé. Réessayez."
+                continue
+            
+            csv_file_path_str = temp_path
+            ui_info["Fichier CSV"] = os.path.basename(csv_file_path_str)
+            current_stage_idx += 1 # Move to PARSE_CSV
+            status_msg = f"Fichier '{os.path.basename(csv_file_path_str)}' sélectionné. Analyse..."
 
-            project_name = temp_name
+        elif current_stage == "PARSE_CSV":
+            help_text_current = "Analyse du fichier CSV en cours..."
+            draw_load_file_ui(stdscr, title, ui_info, status_msg, help_text_current) # Show parsing message
+            time.sleep(0.1) # Brief pause for user to see message
+
+            positions, parse_msg = _parse_csv_file(csv_file_path_str)
+            status_msg = parse_msg # Update status with result of parsing
+            
+            if positions is None: # Parsing failed
+                help_text_current = "Erreur de parsing. ESC pour annuler, ou entrez un nouveau chemin."
+                # Stay in GET_CSV_PATH to allow re-entry or ESC
+                current_stage_idx = stages.index("GET_CSV_PATH") 
+                ui_info["Fichier CSV"] = "Non défini" # Reset UI
+                csv_file_path_str = ""
+                # status_msg already contains the error from _parse_csv_file
+                draw_load_file_ui(stdscr, title, ui_info, status_msg, help_text_current)
+                # Wait for ESC or new input (handled by GET_CSV_PATH)
+                # We could add a getch here to pause on error if needed before auto-looping
+                time.sleep(2) # Pause to show error
+                continue 
+            
+            loaded_positions_data = positions
+            ui_info["Points Chargés"] = str(len(loaded_positions_data))
+            current_stage_idx += 1 # Move to GET_PROJECT_NAME
+            status_msg = f"{parse_msg} Prêt pour nom de projet."
+
+
+        elif current_stage == "GET_PROJECT_NAME":
+            help_text_current = "Entrez le nom du projet. ESC pour annuler."
+            status_msg = "Configuration du projet..." # status_msg might still have parsing success
+            draw_load_file_ui(stdscr, title, ui_info, status_msg, help_text_current)
+
+            temp_proj_name = _get_string_input_curses(stdscr, input_y_offset, 2, "Nom du Projet: ")
+            if temp_proj_name is None: # ESC
+                status_msg = "Annulation..."; draw_load_file_ui(stdscr, title, ui_info, status_msg, "Retour au menu..."); time.sleep(0.5); break
+            
+            if not temp_proj_name:
+                status_msg = "Erreur: Le nom du projet ne peut pas être vide. Réessayez."
+                continue # Stay in GET_PROJECT_NAME
+
+            project_name = temp_proj_name
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            project_folder_name = f"{project_name.replace(' ', '_')}_{timestamp}" 
-            project_path = os.path.join(".", project_folder_name) 
+            project_folder_name = f"{project_name.replace(' ', '_')}_{timestamp}"
+            project_path_created = os.path.join(".", project_folder_name)
             
             try:
-                os.makedirs(project_path, exist_ok=True)
-                status_msg = f"Dossier projet créé: {project_path}"
-                config_values["project_name"] = project_name
-                config_values["project_path"] = project_path
-                current_stage_idx += 1
+                os.makedirs(project_path_created, exist_ok=True)
+                ui_info["Nom du Projet"] = project_name # project_folder_name for full path
+                status_msg = f"Dossier projet: {project_path_created}"
+                current_stage_idx += 1 # Move to CONFIRM_AND_EXECUTE
             except OSError as e:
-                status_msg = f"Erreur création dossier {project_path}: {e}"
-                project_name = ""; project_path = ""; 
+                status_msg = f"Erreur création dossier {project_path_created}: {e}"
+                project_name = ""; project_path_created = ""; ui_info["Nom du Projet"] = "Erreur";
+                # Stay in GET_PROJECT_NAME or allow ESC
+                continue
 
-        elif current_stage == "GET_NUM_Y": # MODIFIÉ: Demander Bandes (ny) en premier
-            help_text_current = "Nombre de bandes de scan sur l'axe Y. ESC pour annuler." # MODIFIÉ
-            status_msg = "Configuration de la grille de scan..."
-            draw_automatic_mode_ui(stdscr, "-- Mode Automatique --", prompt_keys_ordered, ui_values, status_msg, help_text_current)
 
-            temp_ny = _get_int_input_curses(stdscr, input_y_offset, 2, "Bandes (ny) (ex: 4): ", min_val=1) # MODIFIÉ
-            if temp_ny is None: status_msg = "Annulation..."; time.sleep(0.5); break
-                 
-            num_y_points = temp_ny # Variable interne reste num_y_points
-            config_values["num_y_points"] = num_y_points
-            current_stage_idx += 1
+        elif current_stage == "CONFIRM_AND_EXECUTE":
+            status_msg = f"{len(loaded_positions_data)} points prêts pour scan. Dossier: {os.path.basename(project_path_created)}"
+            help_text_current = "'Entrée' pour lancer. 'ESC' pour annuler et retourner au menu."
+            draw_load_file_ui(stdscr, title, ui_info, status_msg, help_text_current)
             
-        elif current_stage == "GET_NUM_X": # MODIFIÉ: Demander Images par bande (nx) ensuite
-            help_text_current = "Nombre d'images à prendre par bande (sur l'axe X). ESC pour annuler." # MODIFIÉ
-            status_msg = "Configuration de la grille de scan..."
-            draw_automatic_mode_ui(stdscr, "-- Mode Automatique --", prompt_keys_ordered, ui_values, status_msg, help_text_current)
+            stdscr.nodelay(False) # Wait for a key press
+            key = stdscr.getch()
 
-            temp_nx = _get_int_input_curses(stdscr, input_y_offset, 2, "Images par bande (nx) (ex: 5): ", min_val=1) # MODIFIÉ
-            if temp_nx is None: status_msg = "Annulation..."; time.sleep(0.5); break
+            if key == 27: # ESC
+                status_msg = "Scan annulé par l'utilisateur."; 
+                draw_load_file_ui(stdscr, title, ui_info, status_msg, "Retour au menu..."); time.sleep(1); break
             
-            num_x_points = temp_nx # Variable interne reste num_x_points
-            config_values["num_x_points"] = num_x_points
-            current_stage_idx += 1
-
-        elif current_stage == "GET_IMAGES_PER_POS":
-            help_text_current = "Nombre de captures d'images à chaque position. ESC pour annuler."
-            status_msg = "Configuration de la capture..."
-            draw_automatic_mode_ui(stdscr, "-- Mode Automatique --", prompt_keys_ordered, ui_values, status_msg, help_text_current)
-
-            temp_imgs = _get_int_input_curses(stdscr, input_y_offset, 2, "Images par Position (ex: 1): ", min_val=1)
-            if temp_imgs is None: status_msg = "Annulation..."; time.sleep(0.5); break
-            
-            images_per_position = temp_imgs
-            config_values["images_per_position"] = images_per_position
-            current_stage_idx += 1
-
-        elif current_stage == "CONFIRM_PARAMETERS":
-            total_pos_str = ui_values["Total Positions"]
-            status_msg = f"Vérifiez les paramètres ({total_pos_str} positions au total)."
-            help_text_current = "'Entrée' pour valider et calculer les positions. 'ESC' pour annuler."
-            draw_automatic_mode_ui(stdscr, "-- Mode Automatique --", prompt_keys_ordered, ui_values, status_msg, help_text_current)
-            
-            stdscr.nodelay(False); key = stdscr.getch()
-            if key == 27: status_msg = "Annulation..."; time.sleep(0.5); break
             elif key == curses.KEY_ENTER or key in [10, 13]:
-                status_msg = "Paramètres confirmés. Calcul des positions..."
-                current_stage_idx += 1 
-            
-        elif current_stage == "CALCULATE_POSITIONS":
-            status_msg = "Calcul en cours..."
-            help_text_current = "Veuillez patienter."
-            draw_automatic_mode_ui(stdscr, "-- Mode Automatique --", prompt_keys_ordered, ui_values, status_msg, help_text_current)
-            time.sleep(0.1) 
+                status_msg = "Lancement de la séquence de scan depuis fichier..."
+                draw_load_file_ui(stdscr, title, ui_info, status_msg, "Scan en cours... ESC pour interrompre.")
+                time.sleep(0.5) # Show "Lancement" message
 
-            calculated_positions, calc_msg = _calculate_scan_positions(
-                num_x_points, num_y_points, XLIM_MM, YLIM_MM, POINT_MARGIN_MM
-            )
-            
-            if calculated_positions is None:
-                status_msg = calc_msg # Contient déjà le message d'erreur du calcul
-                help_text_current = "Erreur de calcul. Appuyez sur ESC et vérifiez les limites/points."
-                draw_automatic_mode_ui(stdscr, "-- Mode Automatique --", prompt_keys_ordered, ui_values, status_msg, help_text_current)
-                # Attendre que l'utilisateur appuie sur ESC pour quitter
-                while True:
-                    if stdscr.getch() == 27: break
-                status_msg = "Annulation suite à erreur de calcul..."; time.sleep(0.5); break
-            else:
-                config_values["calculated_positions"] = calculated_positions
-                csv_feedback_msg = ""
+                # Pass ui_info as base_ui_info for _execute_csv_scan to display fixed info
+                scan_execution_summary = _execute_csv_scan(stdscr, project_path_created, loaded_positions_data, ui_info, title)
                 
-                # --- ÉCRITURE DU FICHIER CSV ---
-                if project_path: # S'assurer que le chemin du projet est défini
-                    csv_file_path = os.path.join(project_path, "position_list.csv")
-                    try:
-                        with open(csv_file_path, 'w', newline='') as csvfile:
-                            csv_writer = csv.writer(csvfile)
-                            # MODIFICATION ICI: Ajouter 'n_img' à l'en-tête
-                            csv_writer.writerow(['X_mm', 'Y_mm', 'n_img']) # En-têtes
-                            for pos_x, pos_y in calculated_positions:
-                                # MODIFICATION ICI: Ajouter images_per_position à chaque ligne
-                                csv_writer.writerow([pos_x, pos_y, images_per_position])
-                        csv_feedback_msg = " position_list.csv sauvegardé."
-                    except IOError as e:
-                        csv_feedback_msg = f" Erreur sauvegarde CSV: {e}."
-                else:
-                    csv_feedback_msg = " Erreur: Chemin du projet non défini pour CSV."
-                # --- FIN ÉCRITURE CSV ---
-                
-                status_msg = calc_msg + csv_feedback_msg # Concaténer les messages
-                current_stage_idx += 1 # Passer à READY_TO_EXECUTE
-        
-        # ... (dans _automatic_mode_loop)
-        elif current_stage == "READY_TO_EXECUTE":
-            help_text_current = "'Entrée' pour lancer la séquence. 'ESC' pour retourner au menu."
-            # status_msg contient déjà le résultat du calcul et du CSV
-            draw_automatic_mode_ui(stdscr, "-- Mode Automatique --", prompt_keys_ordered, ui_values, status_msg, help_text_current)
-            
-            stdscr.nodelay(False); key = stdscr.getch()
-            if key == 27: 
-                status_msg = "Séquence annulée avant démarrage."; 
-                # Redessiner pour s'assurer que le message est vu avant la pause et la sortie
-                draw_automatic_mode_ui(stdscr, "-- Mode Automatique --", prompt_keys_ordered, ui_values, status_msg, "Retour au menu...")
-                time.sleep(1); 
-                break
-            elif key == curses.KEY_ENTER or key in [10, 13]:
-                status_msg = "Lancement de la séquence de scan..."
-                draw_automatic_mode_ui(stdscr, "-- Mode Automatique --", prompt_keys_ordered, ui_values, status_msg, "Scan en cours... ESC pour interrompre.")
-                time.sleep(0.5)
-
-                scan_result_msg = _execute_automatic_scan(
-                    stdscr, 
-                    project_path, 
-                    calculated_positions, # La liste des (x,y)
-                    num_y_points,         # Nombre de bandes (ny)
-                    num_x_points,         # Nombre d'images par bande (nx)
-                    images_per_position,  # Nombre de captures à chaque position (pour _IdXX)
-                    prompt_keys_ordered,  # Pour que _execute_automatic_scan puisse redessiner la base
-                    ui_values
-                )
-                
-                status_msg = scan_result_msg 
+                status_msg = scan_execution_summary
                 help_text_current = "Appuyez sur une touche pour retourner au menu."
-                # Redessiner l'interface avec le message final du scan
-                draw_automatic_mode_ui(stdscr, "-- Mode Automatique --", prompt_keys_ordered, ui_values, status_msg, help_text_current)
-                stdscr.nodelay(False)
-                stdscr.getch() 
-                break # Fin du mode auto après le scan ou annulation
+                draw_load_file_ui(stdscr, title, ui_info, status_msg, help_text_current)
+                stdscr.nodelay(False); stdscr.getch() # Wait for key before exiting
+                break # End of load file mode
+            # Else, loop in CONFIRM_AND_EXECUTE stage waiting for Enter or ESC
 
-    curses.curs_set(0)
-    stdscr.keypad(True)
-    return_message = f"Mode Auto: {project_name}" if project_name else "Mode Auto quitté/annulé."
-    if calculated_positions and project_name:
-        return_message += f" ({len(calculated_positions)} positions)"
+    curses.curs_set(0) # Ensure cursor is hidden on exit
+    stdscr.keypad(True) # Restore keypad state just in case
+    return_message = f"Charger Fichier: {project_name}" if project_name and loaded_positions_data else "Charger Fichier quitté/annulé."
+    if project_name and loaded_positions_data:
+        return_message += f" ({len(loaded_positions_data)} pts)"
     return return_message
-
 
 
 # --- Main Menu Functions ---
@@ -1290,13 +1533,21 @@ def draw_main_menu_ui(stdscr, menu_items, selected_idx, status_message=""):
         x = (w - len(item_text)) // 2; y = 4 + idx * 2
         if idx == selected_idx: stdscr.attron(curses.A_REVERSE); stdscr.addstr(y, x, item_text); stdscr.attroff(curses.A_REVERSE)
         else: stdscr.addstr(y, x, item_text)
-    if status_message: stdscr.addstr(h - 2, 1, status_message[:w-2])
-    stdscr.addstr(h - 1, 1, "HAUT/BAS/ENTRÉE pour sélectionner. 'Q' pour quitter.")
+    
+    status_line_y = h - 3 # Reserve two lines at the bottom for status and help
+    if status_message: 
+        stdscr.move(status_line_y, 1); stdscr.clrtoeol()
+        stdscr.addstr(status_line_y, 1, status_message[:w-2])
+
+    help_line_y = h-2
+    stdscr.move(help_line_y, 1); stdscr.clrtoeol()
+    stdscr.addstr(help_line_y, 1, "HAUT/BAS/ENTRÉE pour sélectionner. 'Q' pour quitter.")
     stdscr.refresh()
 
 def _main_menu_loop(stdscr):
-    global last_command_output 
+    global last_command_output, current_x_mm, current_y_mm 
     curses.curs_set(0); stdscr.keypad(True)
+    # MODIFIED: Added "Charger un fichier"
     menu_items = ["Mode automatique", "Mode manuel", "Charger un fichier", "Démonstration", "Quitter SimuFly"]
     current_selection = 0
     status_msg = f"GPIO {'OK' if pul_device_m1 else 'ERREUR'}. Pos: X={current_x_mm:.1f}, Y={current_y_mm:.1f}"
@@ -1315,30 +1566,42 @@ def _main_menu_loop(stdscr):
                 _manual_mode_loop(stdscr)
                 curses.curs_set(0); stdscr.keypad(True)
                 status_msg = f"Retour du Mode Manuel. Pos: X={current_x_mm:.1f}, Y={current_y_mm:.1f}"; last_command_output = []
-            # --- NEW: Handle Automatic Mode ---
             elif selected_option == "Mode automatique":
                 status_msg = "Lancement Mode Automatique..."; draw_main_menu_ui(stdscr, menu_items, current_selection, status_msg); time.sleep(0.2)
-                auto_mode_status = _automatic_mode_loop(stdscr) # Call the automatic mode loop
+                auto_mode_status = _automatic_mode_loop(stdscr) 
+                curses.curs_set(0); stdscr.keypad(True) 
+                status_msg = f"{auto_mode_status} Pos: X={current_x_mm:.1f}, Y={current_y_mm:.1f}"; last_command_output = []
+            # --- NEW: Handle Load File Mode ---
+            elif selected_option == "Charger un fichier":
+                status_msg = "Lancement Mode Charger Fichier..."; draw_main_menu_ui(stdscr, menu_items, current_selection, status_msg); time.sleep(0.2)
+                load_file_status = _load_file_mode_loop(stdscr) # Call the new load file mode loop
                 curses.curs_set(0); stdscr.keypad(True) # Restore curses settings for main menu
-                status_msg = f"{auto_mode_status} Pos: X={current_x_mm:.1f}, Y={current_y_mm:.1f}"
-                last_command_output = []
+                status_msg = f"{load_file_status} Pos: X={current_x_mm:.1f}, Y={current_y_mm:.1f}"
+                last_command_output = [] # Clear any potential manual mode output
             elif selected_option == "Quitter SimuFly":
                 status_msg = "Quitting SimuFly..."; draw_main_menu_ui(stdscr, menu_items, current_selection, status_msg); time.sleep(0.5); break 
-            else:
+            else: # For "Démonstration" or other unimplemented
                 status_msg = f"Option '{selected_option}' non implémentée."
-                draw_main_menu_ui(stdscr, menu_items, current_selection, status_msg); stdscr.timeout(1500); stdscr.getch(); stdscr.timeout(-1)
-                status_msg = f"Pos: X={current_x_mm:.1f}, Y={current_y_mm:.1f}"
-        else: status_msg = f"Pos: X={current_x_mm:.1f}, Y={current_y_mm:.1f}"
+                draw_main_menu_ui(stdscr, menu_items, current_selection, status_msg); stdscr.timeout(1500); stdscr.getch(); stdscr.timeout(-1) # Show message for 1.5s
+                status_msg = f"Pos: X={current_x_mm:.1f}, Y={current_y_mm:.1f}" # Reset status
+        else: # Other key press, just update status if needed (e.g. if status showed a temp message)
+            status_msg = f"GPIO {'OK' if pul_device_m1 else 'ERREUR'}. Pos: X={current_x_mm:.1f}, Y={current_y_mm:.1f}"
+
 
 if __name__ == "__main__":
     gpio_ok = setup_gpio()
     if gpio_ok: print("GPIO initialisé. Lancement SimuFly Curses...")
     else: print("ERREUR: Init GPIO échouée. Interface Curses démarrera sans fonctions moteur.")
-    time.sleep(0.1)
+    time.sleep(0.1) # Give a moment for the print to show
     try:
         curses.wrapper(_main_menu_loop)
     except Exception as e: 
-        print(f"Erreur critique hors boucle Curses: {e}")
-        import traceback; traceback.print_exc()
+        # This catch is for errors outside the Curses wrapper or if wrapper fails badly
+        print(f"Erreur critique hors boucle Curses principale: {e}")
+        import traceback
+        traceback.print_exc()
     finally:
-        print("Nettoyage GPIO avant de quitter..."); cleanup_gpio(); print("SimuFly terminé.")
+        # curses.endwin() # wrapper handles this
+        print("Nettoyage GPIO avant de quitter SimuFly..."); 
+        cleanup_gpio(); 
+        print("SimuFly terminé.")
