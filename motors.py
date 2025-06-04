@@ -353,7 +353,7 @@ def capture_images(num_captures_requested, base_image_path):
     """
     Captures a specified number of images from the webcam.
     Saves images as base_image_path_0.jpg, base_image_path_1.jpg, etc.
-    Assumes webcam is at index 0.
+    Assumes webcam is at index 0. Attempts to set 4K resolution.
     Returns a list of output messages.
     GStreamer warnings during camera initialization are suppressed.
     """
@@ -361,76 +361,90 @@ def capture_images(num_captures_requested, base_image_path):
     cap = None  # Initialiser cap à None pour une gestion correcte dans le bloc finally
 
     # Tenter d'initialiser la caméra en supprimant les avertissements de console d'OpenCV/GStreamer
-    with suppress_c_stderr():
+    with suppress_c_stderr(): #
         cap = cv2.VideoCapture(0)  # 0 est généralement la webcam par défaut
 
-    if cap is None or not cap.isOpened():
-        messages.append("Error: Could not open webcam. Is it connected and not in use?")
-        # Si cap a été créé (même s'il n'est pas ouvert), il est bon de tenter un release.
-        # cap.release() sur un objet VideoCapture non ouvert est sûr et généralement silencieux.
+    if cap is None or not cap.isOpened(): 
+        messages.append("Error: Could not open webcam. Is it connected and not in use?") #
         if cap is not None:
-            with suppress_c_stderr(): # Au cas où release ferait aussi du bruit
-                cap.release()
-        return messages
+            with suppress_c_stderr(): 
+                cap.release() 
+        return messages 
 
     # À partir d'ici, on suppose que cap n'est pas None et est ouvert.
     try:
-        time.sleep(0.5)  # Permettre à la caméra de s'initialiser
-        actual_captures = 0
-        for i in range(num_captures_requested):
-            # Normalement, read() ne devrait pas générer les avertissements GStreamer spécifiques,
-            # mais si c'est le cas, cet appel pourrait aussi nécessiter d'être enveloppé.
-            ret, frame = cap.read()
-            if not ret:
-                messages.append(f"Error: Could not read frame {i+1}/{num_captures_requested}.")
-                if actual_captures == 0 and i == 0: # Échec total sur la première image
-                    # Pas besoin de cap.release() ici, le bloc finally s'en chargera
-                    return messages # Quitter si la première lecture échoue
-                break  # Arrêter si les images ne peuvent pas être lues
+        target_width = 3840
+        target_height = 2160
+        messages.append(f"  Attempting to set resolution to {target_width}x{target_height}...")
+        
+        # Tenter de définir la largeur et la hauteur
+        # cap.set() peut retourner False si la propriété n'est pas supportée ou ne peut être définie.
+        set_w_ok = cap.set(cv2.CAP_PROP_FRAME_WIDTH, target_width)
+        set_h_ok = cap.set(cv2.CAP_PROP_FRAME_HEIGHT, target_height)
 
-            # Créer le répertoire s'il n'existe pas à partir de base_image_path
-            directory = os.path.dirname(base_image_path)
-            if directory and not os.path.exists(directory):
+        # Vérifier la résolution réellement appliquée par la caméra
+        actual_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        actual_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        
+        if set_w_ok and set_h_ok and actual_width == target_width and actual_height == target_height:
+            messages.append(f"  Successfully set resolution to {actual_width}x{actual_height}.")
+        else:
+            messages.append(f"  Warning: Could not set exact resolution to {target_width}x{target_height}.")
+            messages.append(f"  Actual resolution reported by camera: {actual_width}x{actual_height}.")
+            if not set_w_ok:
+                 messages.append("  Note: cap.set(cv2.CAP_PROP_FRAME_WIDTH) returned False.")
+            if not set_h_ok:
+                 messages.append("  Note: cap.set(cv2.CAP_PROP_FRAME_HEIGHT) returned False.")
+        # --- FIN DE L'AJOUT POUR LA RÉSOLUTION ---
+
+        time.sleep(0.5)  # Permettre à la caméra de s'initialiser avec la nouvelle résolution
+        actual_captures = 0 
+        for i in range(num_captures_requested): 
+            ret, frame = cap.read() 
+            if not ret: 
+                messages.append(f"Error: Could not read frame {i+1}/{num_captures_requested}.") #
+                if actual_captures == 0 and i == 0: 
+                    return messages 
+                break 
+
+            directory = os.path.dirname(base_image_path) 
+            if directory and not os.path.exists(directory): 
                 try:
-                    os.makedirs(directory, exist_ok=True)
-                    messages.append(f"  Created directory: {directory}")
+                    os.makedirs(directory, exist_ok=True) 
+                    messages.append(f"  Created directory: {directory}") 
                 except OSError as e:
-                    messages.append(f"  Error creating directory {directory}: {e}")
-                    # Pas besoin de cap.release() ici, le bloc finally s'en chargera
-                    return messages # Arrêter si on ne peut pas créer le répertoire
+                    messages.append(f"  Error creating directory {directory}: {e}") 
+                    return messages 
             
-            # Construire le nom de fichier : ex : /chemin/vers/image_0.jpg
-            filename_base = os.path.basename(base_image_path)
-            image_filename = os.path.join(directory, f"{filename_base}_{i}.jpg")
+            filename_base = os.path.basename(base_image_path) 
+            image_filename = os.path.join(directory, f"{filename_base}_{i}.jpg") 
 
             try:
-                cv2.imwrite(image_filename, frame)
-                messages.append(f"  Image captured and saved: {image_filename}")
-                actual_captures += 1
+                cv2.imwrite(image_filename, frame) 
+                messages.append(f"  Image captured and saved: {image_filename}") 
+                actual_captures += 1 
             except Exception as e:
-                messages.append(f"  Error saving image {image_filename}: {e}")
-                if actual_captures == 0 and i == 0 : # Échec de sauvegarde de la première image
-                     # Pas besoin de cap.release() ici, le bloc finally s'en chargera
-                     return messages
+                messages.append(f"  Error saving image {image_filename}: {e}") 
+                if actual_captures == 0 and i == 0 : 
+                     return messages 
                 break 
             
-            if i < num_captures_requested - 1:  # Petite pause entre les captures multiples
-                time.sleep(0.2)
-
-        if actual_captures > 0:
-            messages.append(f"--- Capture complete. {actual_captures} image(s) saved. ---")
-        # Si la caméra s'est ouverte mais aucune image n'a été sauvegardée (ex: read failed)
-        elif not (cap is None or not cap.isOpened()): # Vérifie que la caméra était initialement OK
-             messages.append(f"--- Capture failed. No images saved. ---")
+            if i < num_captures_requested - 1: 
+                time.sleep(0.2) 
+                
+        if actual_captures > 0: 
+            messages.append(f"--- Capture complete. {actual_captures} image(s) saved. ---") 
+        elif not (cap is None or not cap.isOpened()): #
+             messages.append(f"--- Capture failed. No images saved. ---") 
         
-    except Exception as e_inner: # Capturer d'autres erreurs inattendues durant la boucle
-        messages.append(f"An unexpected error occurred during capture/saving: {e_inner}")
+    except Exception as e_inner: 
+        messages.append(f"An unexpected error occurred during capture/saving: {e_inner}") 
     finally:
-        if cap is not None:  # S'assurer que cap existe avant d'essayer de le libérer
-            with suppress_c_stderr(): # Supprimer aussi les avertissements de release, le cas échéant
-                cap.release()
+        if cap is not None: 
+            with suppress_c_stderr(): 
+                cap.release() 
     
-    return messages
+    return messages 
 
 
 def parse_command_and_execute(line):
