@@ -640,7 +640,7 @@ def _curses_main_loop(stdscr):
             key = stdscr.getch() # Get character with timeout
 
             if key != curses.ERR: # A key was pressed (ERR means timeout, no key)
-                if key == curses.ascii.ctrl('x'): # Check for CTRL+X
+                if key == curses.ascii.ctrl('h'): # Check for CTRL+X
                     trigger_emergency_stop_action()
                     cmd_line_input_buffer = "" # Clear current input line
                 elif key in [curses.KEY_ENTER, 10, 13]: # Enter pressed
