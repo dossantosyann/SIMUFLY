@@ -7,6 +7,7 @@ import cv2 # <-- Added for OpenCV webcam capture
 import os # <-- Added for path manipulation
 import sys
 from contextlib import contextmanager
+from datetime import datetime # <-- Added for timestamp in automatic mode
 
 # --- Gestionnaire de contexte pour supprimer les messages stderr de bas niveau ---
 @contextmanager
@@ -100,11 +101,8 @@ def setup_gpio():
         endstop_x = gpiozero.InputDevice(ENDSTOP_PIN_X, pull_up=True)
         endstop_y = gpiozero.InputDevice(ENDSTOP_PIN_Y, pull_up=True)
         
-        # We won't print here anymore, to keep the main menu clean
-        # print("GPIO initialized successfully (Motors and Endstops).")
         return True
     except Exception as e:
-        # This print will still go to console if curses hasn't started
         print(f"Error during GPIO initialization: {e}")
         print("Ensure you are running the script with necessary permissions (e.g., sudo)")
         print("and that the GPIO pins are not already in use.")
@@ -118,7 +116,6 @@ def cleanup_gpio():
     if dir_device_m2: dir_device_m2.close()
     if endstop_x: endstop_x.close()
     if endstop_y: endstop_y.close()
-    # print("GPIO cleaned up.") # Keep console clean
 
 def move_motors_coordinated(steps_m1_target, steps_m2_target, pulse_cycle_delay_for_move):
     """
@@ -145,9 +142,7 @@ def move_motors_coordinated(steps_m1_target, steps_m2_target, pulse_cycle_delay_
     if total_iterations == 0:
         return messages
 
-    # --- Trapezoidal Profile Calculation ---
-    target_cruise_delay = pulse_cycle_delay_for_move # Delay for the cruise speed phase
-
+    target_cruise_delay = pulse_cycle_delay_for_move 
     _start_delay_uncapped = target_cruise_delay * RAMP_START_DELAY_MULTIPLIER
     _calculated_initial_delay = min(_start_delay_uncapped, MAX_START_PULSE_CYCLE_DELAY_FOR_RAMP)
     effective_start_end_delay = max(target_cruise_delay, _calculated_initial_delay)
@@ -209,7 +204,6 @@ def move_motors_coordinated(steps_m1_target, steps_m2_target, pulse_cycle_delay_
                  current_step_delay = target_cruise_delay
 
         current_step_delay = max(MINIMUM_PULSE_CYCLE_DELAY, current_step_delay)
-
         perform_pulse_m1 = (i < abs_steps_m1)
         perform_pulse_m2 = (i < abs_steps_m2)
 
@@ -222,734 +216,592 @@ def move_motors_coordinated(steps_m1_target, steps_m2_target, pulse_cycle_delay_
         inter_pulse_delay = current_step_delay - MIN_PULSE_WIDTH
         if inter_pulse_delay > 0:
             time.sleep(inter_pulse_delay)
-            
     return messages
 
 def move_corexy(delta_x_mm, delta_y_mm, pulse_cycle_delay_for_move):
-    """
-    Calculates steps and initiates CoreXY movement with a given pulse cycle delay.
-    Returns a list of messages from motor coordination.
-    """
     global current_x_mm, current_y_mm
     motor_messages = []
-    
     delta_x_steps_cartesian = round(-delta_x_mm * MICROSTEPS_PER_MM)
     delta_y_steps_cartesian = round(delta_y_mm * MICROSTEPS_PER_MM)
-
     steps_m1 = delta_x_steps_cartesian + delta_y_steps_cartesian
     steps_m2 = delta_x_steps_cartesian - delta_y_steps_cartesian
-    
     if steps_m1 == 0 and steps_m2 == 0:
         pass 
     else:
         motor_messages = move_motors_coordinated(int(steps_m1), int(steps_m2), pulse_cycle_delay_for_move)
-
     current_x_mm += delta_x_mm
     current_y_mm += delta_y_mm
-    
     current_x_mm = round(current_x_mm, 3) 
     current_y_mm = round(current_y_mm, 3)
     return motor_messages
 
 def perform_calibration_cycle():
-    """
-    Performs a homing/calibration cycle for Y and X axes using endstops.
-    Moves towards negative Y, then negative X. Sets origin at trigger point, then backs off.
-    Returns a list of output messages.
-    """
     global current_x_mm, current_y_mm, TARGET_SPEED_MM_S, absolute_mode
     output_messages = ["--- Starting Calibration Cycle ---"]
-
     if not all([pul_device_m1, dir_device_m1, pul_device_m2, dir_device_m2, endstop_x, endstop_y]):
         output_messages.append("Error: GPIOs or endstop devices not initialized for calibration.")
         return output_messages
-
     cal_speed = min(CALIBRATION_SPEED_MM_S, MAX_SPEED_MM_S)
     if cal_speed <= 1e-6:
         output_messages.append(f"Error: Calibration speed {cal_speed:.2f} mm/s is too low.")
         return output_messages
-        
     pulse_cycle_delay_cal = MM_PER_MICROSTEP / cal_speed
     actual_pulse_cycle_delay_cal = max(MINIMUM_PULSE_CYCLE_DELAY, pulse_cycle_delay_cal)
     max_steps_travel = int(MAX_CALIBRATION_TRAVEL_MM * MICROSTEPS_PER_MM)
 
-    # --- Calibrate Y-axis (moving towards negative Y) ---
     output_messages.append(f"Calibrating Y-axis at {cal_speed:.2f} mm/s...")
-    dir_device_m1.on()  
-    dir_device_m2.off() 
-    time.sleep(0.002)
-
+    dir_device_m1.on(); dir_device_m2.off(); time.sleep(0.002)
     homed_y = False
     for i in range(max_steps_travel):
         if endstop_y.is_active:
-            output_messages.append("Y-axis endstop triggered.")
-            homed_y = True
-            break
-        
-        pul_device_m1.on()
-        pul_device_m2.on()
-        time.sleep(MIN_PULSE_WIDTH)
-        pul_device_m1.off()
-        pul_device_m2.off()
-        
+            output_messages.append("Y-axis endstop triggered."); homed_y = True; break
+        pul_device_m1.on(); pul_device_m2.on(); time.sleep(MIN_PULSE_WIDTH)
+        pul_device_m1.off(); pul_device_m2.off()
         inter_pulse_delay = actual_pulse_cycle_delay_cal - MIN_PULSE_WIDTH
-        if inter_pulse_delay > 0:
-            time.sleep(inter_pulse_delay)
+        if inter_pulse_delay > 0: time.sleep(inter_pulse_delay)
         if i > 0 and i % 2000 == 0: time.sleep(0.001) 
-
     if not homed_y:
-        output_messages.append("Error: Y-axis calibration failed (endstop not triggered). Stopping.")
-        return output_messages
-
+        output_messages.append("Error: Y-axis calibration failed. Stopping."); return output_messages
     current_y_mm = 0.0
-    output_messages.append(f"Y-axis origin set at trigger point: {current_y_mm:.3f} mm.")
-    output_messages.append(f"Backing off Y-axis by {CALIBRATION_BACKOFF_MM:.2f} mm...")
+    output_messages.append(f"Y-axis origin set: {current_y_mm:.3f} mm. Backing off {CALIBRATION_BACKOFF_MM:.2f} mm...")
     motor_msgs_by = move_corexy(0.0, CALIBRATION_BACKOFF_MM, actual_pulse_cycle_delay_cal) 
     if motor_msgs_by: output_messages.extend(motor_msgs_by)
-    output_messages.append(f"Y-axis backed off. New position Y={current_y_mm:.3f} mm.")
+    output_messages.append(f"Y-axis backed off. New Y={current_y_mm:.3f} mm.")
 
-    # --- Calibrate X-axis (moving towards negative X) ---
     output_messages.append(f"Calibrating X-axis at {cal_speed:.2f} mm/s...")
-    dir_device_m1.off() 
-    dir_device_m2.off() 
-    time.sleep(0.002)
-
+    dir_device_m1.off(); dir_device_m2.off(); time.sleep(0.002)
     homed_x = False
     for i in range(max_steps_travel):
         if endstop_x.is_active: 
-            output_messages.append("X-axis endstop triggered.")
-            homed_x = True
-            break
-        
-        pul_device_m1.on()
-        pul_device_m2.on()
-        time.sleep(MIN_PULSE_WIDTH)
-        pul_device_m1.off()
-        pul_device_m2.off()
-        
+            output_messages.append("X-axis endstop triggered."); homed_x = True; break
+        pul_device_m1.on(); pul_device_m2.on(); time.sleep(MIN_PULSE_WIDTH)
+        pul_device_m1.off(); pul_device_m2.off()
         inter_pulse_delay = actual_pulse_cycle_delay_cal - MIN_PULSE_WIDTH
-        if inter_pulse_delay > 0:
-            time.sleep(inter_pulse_delay)
+        if inter_pulse_delay > 0: time.sleep(inter_pulse_delay)
         if i > 0 and i % 2000 == 0: time.sleep(0.001)
-
     if not homed_x:
-        output_messages.append("Error: X-axis calibration failed (endstop not triggered). Stopping.")
-        return output_messages
-    
+        output_messages.append("Error: X-axis calibration failed. Stopping."); return output_messages
     current_x_mm = 0.0 
-    output_messages.append(f"X-axis origin set at trigger point: {current_x_mm:.3f} mm.")
-    output_messages.append(f"Backing off X-axis by {CALIBRATION_BACKOFF_MM:.2f} mm...")
+    output_messages.append(f"X-axis origin set: {current_x_mm:.3f} mm. Backing off {CALIBRATION_BACKOFF_MM:.2f} mm...")
     motor_msgs_bx = move_corexy(CALIBRATION_BACKOFF_MM, 0.0, actual_pulse_cycle_delay_cal) 
     if motor_msgs_bx: output_messages.extend(motor_msgs_bx)
-    output_messages.append(f"X-axis backed off. New position X={current_x_mm:.3f} mm.")
-
-    output_messages.append(f"--- Calibration Cycle Complete ---")
-    output_messages.append(f"Final position after back-off: X={current_x_mm:.3f}, Y={current_y_mm:.3f} mm")
-    absolute_mode = True 
-    output_messages.append("Mode set to ABS (Absolute).")
+    output_messages.append(f"X-axis backed off. New X={current_x_mm:.3f} mm.")
+    output_messages.append(f"--- Calibration Complete --- Final: X={current_x_mm:.3f}, Y={current_y_mm:.3f} mm")
+    absolute_mode = True; output_messages.append("Mode set to ABS.")
     return output_messages
 
 def capture_images(num_captures_requested, base_image_path):
-    """
-    Captures a specified number of images from the webcam.
-    Saves images as base_image_path_0.jpg, base_image_path_1.jpg, etc.
-    Assumes webcam is at index 0. Attempts to set 4K resolution.
-    Returns a list of output messages.
-    GStreamer warnings during camera initialization are suppressed.
-    """
     messages = []
-    cap = None  # Initialiser cap à None pour une gestion correcte dans le bloc finally
-
-    # Tenter d'initialiser la caméra en supprimant les avertissements de console d'OpenCV/GStreamer
-    with suppress_c_stderr(): #
-        cap = cv2.VideoCapture(0)  # 0 est généralement la webcam par défaut
-
+    cap = None
+    with suppress_c_stderr(): cap = cv2.VideoCapture(0)
     if cap is None or not cap.isOpened(): 
-        messages.append("Error: Could not open webcam. Is it connected and not in use?") #
-        if cap is not None:
-            with suppress_c_stderr(): 
-                cap.release() 
+        messages.append("Error: Could not open webcam."); 
+        if cap is not None: 
+            with suppress_c_stderr(): cap.release()
         return messages 
-
-    # À partir d'ici, on suppose que cap n'est pas None et est ouvert.
     try:
-        target_width = 3840
-        target_height = 2160
+        target_width, target_height = 3840, 2160
         messages.append(f"  Attempting to set resolution to {target_width}x{target_height}...")
-        
-        # Tenter de définir la largeur et la hauteur
-        # cap.set() peut retourner False si la propriété n'est pas supportée ou ne peut être définie.
         set_w_ok = cap.set(cv2.CAP_PROP_FRAME_WIDTH, target_width)
         set_h_ok = cap.set(cv2.CAP_PROP_FRAME_HEIGHT, target_height)
-
-        # Vérifier la résolution réellement appliquée par la caméra
         actual_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         actual_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        
         if set_w_ok and set_h_ok and actual_width == target_width and actual_height == target_height:
             messages.append(f"  Successfully set resolution to {actual_width}x{actual_height}.")
         else:
-            messages.append(f"  Warning: Could not set exact resolution to {target_width}x{target_height}.")
-            messages.append(f"  Actual resolution reported by camera: {actual_width}x{actual_height}.")
-            if not set_w_ok:
-                 messages.append("  Note: cap.set(cv2.CAP_PROP_FRAME_WIDTH) returned False.")
-            if not set_h_ok:
-                 messages.append("  Note: cap.set(cv2.CAP_PROP_FRAME_HEIGHT) returned False.")
-        # --- FIN DE L'AJOUT POUR LA RÉSOLUTION ---
-
-        time.sleep(0.5)  # Permettre à la caméra de s'initialiser avec la nouvelle résolution
+            messages.append(f"  Warning: Could not set exact resolution. Actual: {actual_width}x{actual_height}.")
+        time.sleep(0.5)
         actual_captures = 0 
         for i in range(num_captures_requested): 
             ret, frame = cap.read() 
             if not ret: 
-                messages.append(f"Error: Could not read frame {i+1}/{num_captures_requested}.") #
-                if actual_captures == 0 and i == 0: 
-                    return messages 
+                messages.append(f"Error: Could not read frame {i+1}/{num_captures_requested}.")
+                if actual_captures == 0 and i == 0: return messages 
                 break 
-
             directory = os.path.dirname(base_image_path) 
             if directory and not os.path.exists(directory): 
-                try:
-                    os.makedirs(directory, exist_ok=True) 
-                    messages.append(f"  Created directory: {directory}") 
-                except OSError as e:
-                    messages.append(f"  Error creating directory {directory}: {e}") 
-                    return messages 
-            
+                try: os.makedirs(directory, exist_ok=True); messages.append(f"  Created directory: {directory}") 
+                except OSError as e: messages.append(f"  Error creating directory {directory}: {e}"); return messages 
             filename_base = os.path.basename(base_image_path) 
             image_filename = os.path.join(directory, f"{filename_base}_{i}.jpg") 
-
             try:
-                cv2.imwrite(image_filename, frame) 
-                messages.append(f"  Image captured and saved: {image_filename}") 
-                actual_captures += 1 
+                cv2.imwrite(image_filename, frame); messages.append(f"  Image captured: {image_filename}"); actual_captures += 1 
             except Exception as e:
                 messages.append(f"  Error saving image {image_filename}: {e}") 
-                if actual_captures == 0 and i == 0 : 
-                     return messages 
+                if actual_captures == 0 and i == 0 : return messages 
                 break 
-            
-            if i < num_captures_requested - 1: 
-                time.sleep(0.2) 
-                
-        if actual_captures > 0: 
-            messages.append(f"--- Capture complete. {actual_captures} image(s) saved. ---") 
-        elif not (cap is None or not cap.isOpened()): #
-             messages.append(f"--- Capture failed. No images saved. ---") 
-        
-    except Exception as e_inner: 
-        messages.append(f"An unexpected error occurred during capture/saving: {e_inner}") 
+            if i < num_captures_requested - 1: time.sleep(0.2) 
+        if actual_captures > 0: messages.append(f"--- Capture complete. {actual_captures} image(s) saved. ---") 
+        elif not (cap is None or not cap.isOpened()): messages.append(f"--- Capture failed. No images saved. ---") 
+    except Exception as e_inner: messages.append(f"An unexpected error during capture: {e_inner}") 
     finally:
         if cap is not None: 
-            with suppress_c_stderr(): 
-                cap.release() 
-    
+            with suppress_c_stderr(): cap.release() 
     return messages 
 
-
 def parse_command_and_execute(line):
-    """
-    Parses a custom command line and executes it for the Manual Mode.
-    Returns a tuple: (list_of_output_messages, continue_running_boolean).
-    The continue_running_boolean is True if manual mode should continue, False to return to main menu.
-    """
     global current_x_mm, current_y_mm, absolute_mode, TARGET_SPEED_MM_S, XLIM_MM, YLIM_MM 
-    
     output_messages = []
     command = line.strip().upper()
-    # Keep original case for path in CAPTURE command
     parts_orig_case = line.strip().split()
     parts = command.split()
     instruction = parts[0] if parts else ""
-
-    output_messages.append(f"CMD: {line.strip()}") # Show original case command
+    output_messages.append(f"CMD: {line.strip()}")
 
     if instruction == "ABS":
-        absolute_mode = True
-        output_messages.append("  Mode: Absolute Positioning (ABS)")
+        absolute_mode = True; output_messages.append("  Mode: Absolute (ABS)")
     elif instruction == "REL":
-        absolute_mode = False
-        output_messages.append("  Mode: Relative Positioning (REL)")
+        absolute_mode = False; output_messages.append("  Mode: Relative (REL)")
     elif instruction == "CALIBRATE" or instruction == "CAL":
-        output_messages.append("  Calibration initiated...")
-        cal_messages = perform_calibration_cycle()
-        output_messages.extend(cal_messages)
+        output_messages.append("  Calibration initiated..."); cal_messages = perform_calibration_cycle(); output_messages.extend(cal_messages)
     elif (instruction == "SET" and len(parts) > 1 and parts[1] == "HOME") or instruction == "SETHOME":
         output_messages.append("  Setting current position as HOME (0,0)...")
-        current_x_mm = 0.0
-        current_y_mm = 0.0
-        absolute_mode = True 
-        output_messages.append(f"  New logical origin set at current physical position.")
-        output_messages.append(f"  Current Position: X={current_x_mm:.3f} mm, Y={current_y_mm:.3f} mm")
-        output_messages.append("  Mode set to ABS (Absolute).")
+        current_x_mm = 0.0; current_y_mm = 0.0; absolute_mode = True 
+        output_messages.append(f"  New logical origin. Current Pos: X={current_x_mm:.3f}, Y={current_y_mm:.3f}. Mode: ABS.")
     elif instruction == "HOME":
-        output_messages.append("  Homing (HOME to logical 0,0):")
-        target_x_abs = 0.0
-        target_y_abs = 0.0
-        
-        dx_home = 0.0 
-        dy_home = 0.0
-        if absolute_mode:
-            dx_home = target_x_abs - current_x_mm
-            dy_home = target_y_abs - current_y_mm
-        
+        output_messages.append("  Homing (to logical 0,0):")
+        target_x_abs, target_y_abs = 0.0, 0.0
+        dx_home, dy_home = 0.0, 0.0
+        if absolute_mode: dx_home = target_x_abs - current_x_mm; dy_home = target_y_abs - current_y_mm
         actual_homing_speed = min(HOMING_SPEED_MM_S, MAX_SPEED_MM_S)
         home_path_length_mm = math.sqrt(dx_home**2 + dy_home**2)
-
         if home_path_length_mm > (MM_PER_MICROSTEP / 2.0) and absolute_mode:
-            output_messages.append(f"    Moving to 0,0 from {current_x_mm:.2f}, {current_y_mm:.2f} at {actual_homing_speed:.2f} mm/s")
+            output_messages.append(f"    Moving to 0,0 from {current_x_mm:.2f},{current_y_mm:.2f} at {actual_homing_speed:.2f} mm/s")
             time_for_home_move_s = home_path_length_mm / actual_homing_speed
-            
             delta_x_steps_cartesian_home = round(-dx_home * MICROSTEPS_PER_MM) 
             delta_y_steps_cartesian_home = round(dy_home * MICROSTEPS_PER_MM)
             steps_m1_home = delta_x_steps_cartesian_home + delta_y_steps_cartesian_home
             steps_m2_home = delta_x_steps_cartesian_home - delta_y_steps_cartesian_home
             num_iterations_home = max(abs(int(steps_m1_home)), abs(int(steps_m2_home)))
-
             if num_iterations_home > 0:
                 pulse_delay_for_home_move = time_for_home_move_s / num_iterations_home
                 actual_pulse_delay_for_home_move = max(MINIMUM_PULSE_CYCLE_DELAY, pulse_delay_for_home_move)
                 motor_msgs = move_corexy(dx_home, dy_home, actual_pulse_delay_for_home_move)
                 output_messages.extend(motor_msgs)
-            else: 
-                current_x_mm = target_x_abs
-                current_y_mm = target_y_abs
+            else: current_x_mm = target_x_abs; current_y_mm = target_y_abs
         else: 
-            current_x_mm = target_x_abs
-            current_y_mm = target_y_abs
-            if absolute_mode:
-                 output_messages.append("    Already at (or very close to) logical 0,0.")
-            else: 
-                output_messages.append("    Logical position reset to 0,0. No physical movement in REL for this HOME.")
-        output_messages.append(f"  New position: X={current_x_mm:.3f} mm, Y={current_y_mm:.3f} mm")
-            
+            current_x_mm = target_x_abs; current_y_mm = target_y_abs
+            output_messages.append("    Already at logical 0,0." if absolute_mode else "    Logical pos reset to 0,0. No physical move in REL.")
+        output_messages.append(f"  New position: X={current_x_mm:.3f}, Y={current_y_mm:.3f}")
     elif instruction.startswith("S") and instruction != "MOVE": 
         try:
             speed_val_mm_s_req = 0.0
-            if len(instruction) > 1 and instruction[1:].replace('.', '', 1).isdigit():
-                 speed_val_mm_s_req = float(instruction[1:])
-            elif len(parts) > 1 and parts[1].replace('.', '', 1).isdigit():
-                 speed_val_mm_s_req = float(parts[1])
-            else:
-                output_messages.append(f"  Invalid S command format. Use S<value> or S <value>.")
-                return output_messages, True
-
+            if len(instruction) > 1 and instruction[1:].replace('.', '', 1).isdigit(): speed_val_mm_s_req = float(instruction[1:])
+            elif len(parts) > 1 and parts[1].replace('.', '', 1).isdigit(): speed_val_mm_s_req = float(parts[1])
+            else: output_messages.append(f"  Invalid S format."); return output_messages, True
             if speed_val_mm_s_req > 0:
                 if speed_val_mm_s_req > MAX_SPEED_MM_S: 
                     TARGET_SPEED_MM_S = MAX_SPEED_MM_S
-                    output_messages.append(f"  Requested speed {speed_val_mm_s_req:.2f} mm/s exceeds limit of {MAX_SPEED_MM_S:.2f} mm/s.")
-                    output_messages.append(f"  Global target speed set to MAX: {TARGET_SPEED_MM_S:.2f} mm/s")
-                else:
-                    TARGET_SPEED_MM_S = speed_val_mm_s_req
-                    output_messages.append(f"  Global target speed set to: {TARGET_SPEED_MM_S:.2f} mm/s")
-            else:
-                output_messages.append(f"  Speed S must be positive (and <= {MAX_SPEED_MM_S:.2f} mm/s).")
-        except ValueError:
-            output_messages.append(f"  Invalid speed value in S command: {parts[1] if len(parts) > 1 else instruction[1:]}")
-    
+                    output_messages.append(f"  Requested speed {speed_val_mm_s_req:.2f} > limit {MAX_SPEED_MM_S:.2f}. Speed set to MAX.")
+                else: TARGET_SPEED_MM_S = speed_val_mm_s_req; output_messages.append(f"  Global target speed set to: {TARGET_SPEED_MM_S:.2f} mm/s")
+            else: output_messages.append(f"  Speed S must be positive (<= {MAX_SPEED_MM_S:.2f} mm/s).")
+        except ValueError: output_messages.append(f"  Invalid speed value in S: {parts[1] if len(parts) > 1 else instruction[1:]}")
     elif instruction == "LIMITS":
         if len(parts) > 1:
             sub_command = parts[1].upper()
-            if sub_command == "OFF":
-                XLIM_MM = float('inf')
-                YLIM_MM = float('inf')
-                output_messages.append("  Coordinate limits DISABLED.")
-                output_messages.append("  Warning: Moves can exceed default physical boundaries.")
-            elif sub_command == "ON":
-                XLIM_MM = DEFAULT_XLIM_MM
-                YLIM_MM = DEFAULT_YLIM_MM
-                output_messages.append(f"  Coordinate limits ENABLED (X: [0, {XLIM_MM:.0f}], Y: [0, {YLIM_MM:.0f}]).")
-            else:
-                output_messages.append("  Usage: LIMITS [ON|OFF]")
+            if sub_command == "OFF": XLIM_MM, YLIM_MM = float('inf'), float('inf'); output_messages.append("  Coordinate limits DISABLED.")
+            elif sub_command == "ON": XLIM_MM, YLIM_MM = DEFAULT_XLIM_MM, DEFAULT_YLIM_MM; output_messages.append(f"  Limits ENABLED (X:[0,{XLIM_MM:.0f}], Y:[0,{YLIM_MM:.0f}]).")
+            else: output_messages.append("  Usage: LIMITS [ON|OFF]")
         else:
-            x_lim_display = f"{XLIM_MM:.0f}" if XLIM_MM != float('inf') else "INF (Disabled)"
-            y_lim_display = f"{YLIM_MM:.0f}" if YLIM_MM != float('inf') else "INF (Disabled)"
-            output_messages.append(f"  Current effective limits: X=[0, {x_lim_display}], Y=[0, {y_lim_display}]")
-            output_messages.append("  Use 'LIMITS ON' or 'LIMITS OFF' to change.")
-
-    # --- NEW: CAPTURE Command ---
+            x_disp = f"{XLIM_MM:.0f}" if XLIM_MM!=float('inf') else "INF"; y_disp = f"{YLIM_MM:.0f}" if YLIM_MM!=float('inf') else "INF"
+            output_messages.append(f"  Limits: X=[0, {x_disp}], Y=[0, {y_disp}]. Use 'LIMITS ON/OFF'.")
     elif instruction == "CAPTURE":
-        if len(parts_orig_case) == 3: # CAPTURE N PATH
-            num_images_str = parts_orig_case[1]
-            image_base_path_str = parts_orig_case[2] # Use original case for path
+        if len(parts_orig_case) == 3:
             try:
-                num_img = int(num_images_str)
-                if num_img <= 0:
-                    output_messages.append("  Error: Number of images (N) must be a positive integer.")
-                elif not image_base_path_str:
-                    output_messages.append("  Error: Image base path (PATH) cannot be empty.")
+                num_img = int(parts_orig_case[1])
+                image_base_path_str = parts_orig_case[2]
+                if num_img <= 0: output_messages.append("  Error: N must be positive.")
+                elif not image_base_path_str: output_messages.append("  Error: PATH cannot be empty.")
                 else:
-                    output_messages.append(f"  Initiating capture of {num_img} image(s) to path starting with '{image_base_path_str}'...")
-                    # This function call might take some time
-                    capture_msgs = capture_images(num_img, image_base_path_str) 
-                    output_messages.extend(capture_msgs)
-            except ValueError:
-                output_messages.append(f"  Error: Invalid number of images '{num_images_str}'. Must be an integer.")
-            except Exception as e: # Catch other potential errors from capture_images
-                output_messages.append(f"  An error occurred during image capture: {e}")
-        else:
-            output_messages.append("  Usage: CAPTURE <N> <PATH>")
-            output_messages.append("    N: Number of images to capture (e.g., 1, 3).")
-            output_messages.append("    PATH: Base name and path for images (e.g., /tmp/shot or ./captures/img).")
-            output_messages.append("          Images will be saved as PATH_0.jpg, PATH_1.jpg, etc.")
-            
+                    output_messages.append(f"  Capturing {num_img} image(s) to '{image_base_path_str}'..."); 
+                    capture_msgs = capture_images(num_img, image_base_path_str); output_messages.extend(capture_msgs)
+            except ValueError: output_messages.append(f"  Error: Invalid N '{parts_orig_case[1]}'. Must be integer.")
+            except Exception as e: output_messages.append(f"  Capture error: {e}")
+        else: output_messages.append("  Usage: CAPTURE <N> <PATH> (e.g. CAPTURE 1 ./shot)")
     elif instruction == "MOVE" :
-        target_x_cmd = None
-        target_y_cmd = None
-        s_value_this_cmd_req = None 
-        
-        for part in parts[1:]: # Use uppercase parts for parsing X, Y, S parameters
-            if part.startswith('X'):
-                try: target_x_cmd = float(part[1:])
-                except ValueError: output_messages.append(f"  Invalid X value: {part}"); return output_messages, True
-            elif part.startswith('Y'):
-                try: target_y_cmd = float(part[1:])
-                except ValueError: output_messages.append(f"  Invalid Y value: {part}"); return output_messages, True
-            elif part.startswith('S'):
-                 try: 
-                     s_value_this_cmd_req = float(part[1:])
-                 except ValueError: output_messages.append(f"  Invalid S value in MOVE: {part}")
-
-        if target_x_cmd is None and target_y_cmd is None:
-            output_messages.append("  No X or Y coordinate specified for MOVE.")
-            return output_messages, True
-
+        target_x_cmd, target_y_cmd, s_value_this_cmd_req = None, None, None
+        for part in parts[1:]:
+            if part.startswith('X'): try: target_x_cmd = float(part[1:])
+            except ValueError: output_messages.append(f"  Invalid X: {part}"); return output_messages, True
+            elif part.startswith('Y'): try: target_y_cmd = float(part[1:])
+            except ValueError: output_messages.append(f"  Invalid Y: {part}"); return output_messages, True
+            elif part.startswith('S'): try: s_value_this_cmd_req = float(part[1:])
+            except ValueError: output_messages.append(f"  Invalid S in MOVE: {part}")
+        if target_x_cmd is None and target_y_cmd is None: output_messages.append("  No X or Y for MOVE."); return output_messages, True
         current_move_speed_mm_s = TARGET_SPEED_MM_S 
         if s_value_this_cmd_req is not None:
             if s_value_this_cmd_req > 0:
-                if s_value_this_cmd_req > MAX_SPEED_MM_S: 
-                    current_move_speed_mm_s = MAX_SPEED_MM_S
-                    output_messages.append(f"  Requested MOVE speed {s_value_this_cmd_req:.2f} mm/s exceeds limit of {MAX_SPEED_MM_S:.2f} mm/s.")
-                    output_messages.append(f"  MOVE speed clamped to MAX: {current_move_speed_mm_s:.2f} mm/s.")
-                else:
-                    current_move_speed_mm_s = s_value_this_cmd_req
-            else: 
-                output_messages.append(f"  Speed S in MOVE must be positive. Using global {TARGET_SPEED_MM_S:.2f} mm/s (max {MAX_SPEED_MM_S:.2f} mm/s).")
-        
+                if s_value_this_cmd_req > MAX_SPEED_MM_S: current_move_speed_mm_s = MAX_SPEED_MM_S; output_messages.append(f"  MOVE speed {s_value_this_cmd_req:.2f} > limit. Clamped to MAX: {current_move_speed_mm_s:.2f}.")
+                else: current_move_speed_mm_s = s_value_this_cmd_req
+            else: output_messages.append(f"  Speed S in MOVE must be positive. Using global {TARGET_SPEED_MM_S:.2f}.")
         current_move_speed_mm_s = min(current_move_speed_mm_s, MAX_SPEED_MM_S)
-
-        final_target_x_mm = current_x_mm
-        final_target_y_mm = current_y_mm
+        final_target_x_mm, final_target_y_mm = current_x_mm, current_y_mm
         if absolute_mode:
             if target_x_cmd is not None: final_target_x_mm = target_x_cmd
             if target_y_cmd is not None: final_target_y_mm = target_y_cmd
         else: 
             if target_x_cmd is not None: final_target_x_mm = current_x_mm + target_x_cmd
             if target_y_cmd is not None: final_target_y_mm = current_y_mm + target_y_cmd
-        
         actual_target_x_mm = max(0.0, min(final_target_x_mm, XLIM_MM))
         actual_target_y_mm = max(0.0, min(final_target_y_mm, YLIM_MM))
-
-        clamped_output_needed = False
-        if XLIM_MM != float('inf') or YLIM_MM != float('inf') : 
-            if abs(actual_target_x_mm - final_target_x_mm) > 1e-9 or abs(actual_target_y_mm - final_target_y_mm) > 1e-9 : 
-                 clamped_output_needed = True
-        elif final_target_x_mm < 0 or final_target_y_mm < 0 : 
-             clamped_output_needed = True
-
-
-        if clamped_output_needed:
-            output_messages.append(f"  Warning: Target ({final_target_x_mm:.2f}, {final_target_y_mm:.2f}) is out of effective bounds.")
-            output_messages.append(f"           Will be clamped to ({actual_target_x_mm:.2f}, {actual_target_y_mm:.2f}).")
-
-        delta_x_to_move = actual_target_x_mm - current_x_mm
-        delta_y_to_move = actual_target_y_mm - current_y_mm
-        
+        clamped = False
+        if XLIM_MM!=float('inf') or YLIM_MM!=float('inf'): 
+            if abs(actual_target_x_mm-final_target_x_mm)>1e-9 or abs(actual_target_y_mm-final_target_y_mm)>1e-9 : clamped=True
+        elif final_target_x_mm < 0 or final_target_y_mm < 0 : clamped=True
+        if clamped: output_messages.append(f"  Warn: Target ({final_target_x_mm:.2f},{final_target_y_mm:.2f}) out of bounds. Clamped to ({actual_target_x_mm:.2f},{actual_target_y_mm:.2f}).")
+        delta_x_to_move, delta_y_to_move = actual_target_x_mm - current_x_mm, actual_target_y_mm - current_y_mm
         path_length_mm = math.sqrt(delta_x_to_move**2 + delta_y_to_move**2)
-
         if path_length_mm < (MM_PER_MICROSTEP / 2.0):
-            output_messages.append(f"  Move too small or already at target. Current: ({current_x_mm:.3f}, {current_y_mm:.3f}), Target: ({actual_target_x_mm:.3f}, {actual_target_y_mm:.3f})")
-            current_x_mm = actual_target_x_mm 
-            current_y_mm = actual_target_y_mm
-            current_x_mm = round(current_x_mm,3) 
-            current_y_mm = round(current_y_mm,3)
+            output_messages.append(f"  Move too small. Current:({current_x_mm:.3f},{current_y_mm:.3f}), Target:({actual_target_x_mm:.3f},{actual_target_y_mm:.3f})")
+            current_x_mm,current_y_mm = round(actual_target_x_mm,3), round(actual_target_y_mm,3)
         else:
             delta_x_steps_cartesian = round(-delta_x_to_move * MICROSTEPS_PER_MM) 
             delta_y_steps_cartesian = round(delta_y_to_move * MICROSTEPS_PER_MM)
-            steps_m1 = delta_x_steps_cartesian + delta_y_steps_cartesian
-            steps_m2 = delta_x_steps_cartesian - delta_y_steps_cartesian
+            steps_m1, steps_m2 = (delta_x_steps_cartesian + delta_y_steps_cartesian), (delta_x_steps_cartesian - delta_y_steps_cartesian)
             num_iterations = max(abs(int(steps_m1)), abs(int(steps_m2)))
-
             if num_iterations == 0: 
-                output_messages.append("  No motor steps required for this move (delta too small).")
-                current_x_mm = actual_target_x_mm 
-                current_y_mm = actual_target_y_mm
-                current_x_mm = round(current_x_mm,3)
-                current_y_mm = round(current_y_mm,3)
+                output_messages.append("  No motor steps for move."); current_x_mm,current_y_mm = round(actual_target_x_mm,3),round(actual_target_y_mm,3)
             else:
-                if current_move_speed_mm_s <= 1e-6: 
-                    output_messages.append(f"  Target speed {current_move_speed_mm_s:.2e} mm/s is too low. No move executed.")
+                if current_move_speed_mm_s <= 1e-6: output_messages.append(f"  Speed {current_move_speed_mm_s:.2e} too low. No move.")
                 else:
                     time_for_move_s = path_length_mm / current_move_speed_mm_s
                     pulse_delay_for_this_move = time_for_move_s / num_iterations
                     actual_pulse_delay_for_this_move = max(MINIMUM_PULSE_CYCLE_DELAY, pulse_delay_for_this_move)
-                    
-                    effective_speed_mm_s = 0 
-                    if (num_iterations * actual_pulse_delay_for_this_move) > 1e-9: 
-                        effective_speed_mm_s = path_length_mm / (num_iterations * actual_pulse_delay_for_this_move)
-                    else: 
-                        effective_speed_mm_s = current_move_speed_mm_s 
-
-                    output_messages.append(f"  Moving by dx={delta_x_to_move:.3f} mm, dy={delta_y_to_move:.3f} mm")
-                    output_messages.append(f"  To X={actual_target_x_mm:.3f}, Y={actual_target_y_mm:.3f}")
-                    output_messages.append(f"  Target speed (cruise): {current_move_speed_mm_s:.2f} mm/s. Effective cruise speed: {effective_speed_mm_s:.2f} mm/s.")
-                    output_messages.append(f"  Cruise pulse cycle delay: {actual_pulse_delay_for_this_move*1000:.4f} ms.")
-                    
+                    effective_speed_mm_s = path_length_mm / (num_iterations * actual_pulse_delay_for_this_move) if (num_iterations * actual_pulse_delay_for_this_move) > 1e-9 else current_move_speed_mm_s
+                    output_messages.append(f"  Moving by dx={delta_x_to_move:.3f}, dy={delta_y_to_move:.3f} to X={actual_target_x_mm:.3f}, Y={actual_target_y_mm:.3f}")
+                    output_messages.append(f"  Target speed: {current_move_speed_mm_s:.2f}. Effective: {effective_speed_mm_s:.2f} mm/s. Pulse delay: {actual_pulse_delay_for_this_move*1000:.4f} ms.")
                     motor_msgs = move_corexy(delta_x_to_move, delta_y_to_move, actual_pulse_delay_for_this_move)
                     output_messages.extend(motor_msgs)
-        
         output_messages.append(f"  New position: X={current_x_mm:.3f} mm, Y={current_y_mm:.3f} mm")
-
     elif instruction == "POS":
-        x_lim_display = f"{XLIM_MM:.0f}" if XLIM_MM != float('inf') else "INF (Disabled)"
-        y_lim_display = f"{YLIM_MM:.0f}" if YLIM_MM != float('inf') else "INF (Disabled)"
-        output_messages.append(f"  Current Position: X={current_x_mm:.3f} mm, Y={current_y_mm:.3f} mm")
-        output_messages.append(f"  Target Speed: {TARGET_SPEED_MM_S:.2f} mm/s (Max settable: {MAX_SPEED_MM_S:.2f} mm/s)") 
-        output_messages.append(f"  Mode: {'Absolute' if absolute_mode else 'Relative'}")
-        output_messages.append(f"  Effective Limits: X=[0, {x_lim_display}], Y=[0, {y_lim_display}]")
-        if endstop_x and endstop_y:
-            output_messages.append(f"  Endstop Status: X={'ACTIVE (pressed)' if endstop_x.is_active else 'Inactive'}, Y={'ACTIVE (pressed)' if endstop_y.is_active else 'Inactive'}")
-
-    # MODIFIED: EXIT/QUIT now returns False to signal _manual_mode_loop to stop
-    elif instruction in ["EXIT", "QUIT", "MENU"]: # Added MENU as an alias
-        output_messages.append("  Returning to main menu...")
-        return output_messages, False 
-        
+        x_disp = f"{XLIM_MM:.0f}" if XLIM_MM!=float('inf') else "INF"; y_disp = f"{YLIM_MM:.0f}" if YLIM_MM!=float('inf') else "INF"
+        output_messages.append(f"  Pos: X={current_x_mm:.3f}, Y={current_y_mm:.3f}. Speed: {TARGET_SPEED_MM_S:.2f} (Max: {MAX_SPEED_MM_S:.2f}). Mode: {'ABS' if absolute_mode else 'REL'}.")
+        output_messages.append(f"  Limits: X=[0,{x_disp}], Y=[0,{y_disp}]. Endstops: X={'TRIG' if endstop_x.is_active else 'open'}, Y={'TRIG' if endstop_y.is_active else 'open'}")
+    elif instruction in ["EXIT", "QUIT", "MENU"]:
+        output_messages.append("  Returning to main menu..."); return output_messages, False 
     else:
-        if instruction: 
-            output_messages.append(f"  Unknown or unsupported command: {instruction}")
-    
-    return output_messages, True # Continue manual mode loop
+        if instruction: output_messages.append(f"  Unknown command: {instruction}")
+    return output_messages, True
 
-# RENAMED from draw_ui
 def draw_manual_mode_ui(stdscr, header_lines, status_lines, command_output_lines, input_prompt):
-    """Draws the entire Manual Mode UI in the curses window."""
-    stdscr.clear()
-    max_y, max_x = stdscr.getmaxyx()
-    current_y = 0
-
-    for i, line in enumerate(header_lines):
-        if current_y < max_y:
-            stdscr.addstr(current_y, 0, line[:max_x-1]) 
-            current_y += 1
-    if current_y < max_y: 
-        stdscr.addstr(current_y, 0, "-" * (max_x -1) )
-        current_y +=1
-
-    for i, line in enumerate(status_lines):
-        if current_y < max_y:
-            stdscr.addstr(current_y, 0, line[:max_x-1])
-            current_y += 1
-    if current_y < max_y: 
-        stdscr.addstr(current_y, 0, "-" * (max_x-1) )
-        current_y +=1
-    
-    output_start_y = current_y
-    available_lines_for_output = max_y - output_start_y - 2 
-    
-    start_index = 0
+    stdscr.clear(); max_y, max_x = stdscr.getmaxyx(); current_y = 0
+    for line in header_lines: 
+        if current_y < max_y: stdscr.addstr(current_y, 0, line[:max_x-1]); current_y += 1
+    if current_y < max_y: stdscr.addstr(current_y, 0, "-"*(max_x-1)); current_y +=1
+    for line in status_lines:
+        if current_y < max_y: stdscr.addstr(current_y, 0, line[:max_x-1]); current_y += 1
+    if current_y < max_y: stdscr.addstr(current_y, 0, "-"*(max_x-1)); current_y +=1
+    output_start_y = current_y; available_lines_for_output = max_y - output_start_y - 2 
+    start_idx = 0
     if len(command_output_lines) > available_lines_for_output and available_lines_for_output > 0 :
-        start_index = len(command_output_lines) - available_lines_for_output
-    
+        start_idx = len(command_output_lines) - available_lines_for_output
     for i, line in enumerate(command_output_lines[start_index:]):
-        if output_start_y + i < max_y - 2: 
-            stdscr.addstr(output_start_y + i, 0, line[:max_x-1]) 
-    
+        if output_start_y + i < max_y - 2: stdscr.addstr(output_start_y + i, 0, line[:max_x-1]) 
     current_y = max_y - 2 
-    if current_y > 0 : 
-         stdscr.addstr(current_y, 0, "-" * (max_x-1) )
-    
+    if current_y > 0 : stdscr.addstr(current_y, 0, "-"*(max_x-1))
     input_line_y = max_y - 1
-    if input_line_y > 0: 
-        stdscr.addstr(input_line_y, 0, input_prompt)
-        stdscr.move(input_line_y, len(input_prompt)) 
-
+    if input_line_y > 0: stdscr.addstr(input_line_y, 0, input_prompt); stdscr.move(input_line_y, len(input_prompt)) 
     stdscr.refresh()
 
-# RENAMED from _curses_main_loop
 def _manual_mode_loop(stdscr):
-    """Main loop for the Manual Mode command-line interface."""
     global TARGET_SPEED_MM_S, current_x_mm, current_y_mm, absolute_mode, last_command_output, XLIM_MM, YLIM_MM
-
-    curses.curs_set(1) # Show cursor for input
-    stdscr.nodelay(False)
-    last_command_output = ["--- Switched to Mode Manuel ---", "Type 'MENU' or 'EXIT' to return to main menu."]
-
-
+    curses.curs_set(1); stdscr.nodelay(False)
+    last_command_output = ["--- Switched to Mode Manuel ---", "Type 'MENU' or 'EXIT' to return."]
     running_manual_mode = True
     while running_manual_mode:
-        x_limit_display_str = f"{XLIM_MM:.0f}" if XLIM_MM != float('inf') else "INF (Disabled)"
-        y_limit_display_str = f"{YLIM_MM:.0f}" if YLIM_MM != float('inf') else "INF (Disabled)"
-
+        x_lim_disp = f"{XLIM_MM:.0f}" if XLIM_MM!=float('inf') else "INF"; y_lim_disp = f"{YLIM_MM:.0f}" if YLIM_MM!=float('inf') else "INF"
         header = [
             "--- CoreXY CLI Controller (Mode Manuel) ---",
-            f"Max Settable Speed: {MAX_SPEED_MM_S:.2f} mm/s",
-            f"Calibration Speed: {CALIBRATION_SPEED_MM_S} mm/s",
-            f"Effective Limits: X=[0, {x_limit_display_str}], Y=[0, {y_limit_display_str}] mm",
-            f"Resolution: {MM_PER_MICROSTEP} mm/microstep ({MICROSTEPS_PER_MM} microsteps/mm)",
-            # Simplified help for manual mode, full help can be a command if needed
-            "Commands: MOVE X Y [S], ABS, REL, HOME, SETHOME, CAL, CAPTURE, S, LIMITS, POS, MENU/EXIT"
+            f"Max Speed: {MAX_SPEED_MM_S:.2f}, Cal Speed: {CALIBRATION_SPEED_MM_S}, Limits: X=[0,{x_lim_disp}], Y=[0,{y_lim_disp}]",
+            f"Resolution: {MM_PER_MICROSTEP} mm/µstep ({MICROSTEPS_PER_MM} µsteps/mm)", "",
+            "Cmds: MOVE X Y [S], ABS, REL, HOME, SETHOME, CAL, CAPTURE, S, LIMITS, POS, MENU/EXIT"
         ]
-        status_info = [ 
-            f"Position: X={current_x_mm:.3f}, Y={current_y_mm:.3f} mm",
-            f"Speed: {TARGET_SPEED_MM_S:.2f} mm/s, Mode: {'ABS' if absolute_mode else 'REL'}"
-        ]
-        if endstop_x and endstop_y:
-             status_info.append(f"Endstops: X={'TRIG' if endstop_x.is_active else 'open'}, Y={'TRIG' if endstop_y.is_active else 'open'}")
-        
+        status_info = [f"Pos: X={current_x_mm:.3f}, Y={current_y_mm:.3f} mm. Speed: {TARGET_SPEED_MM_S:.2f} mm/s. Mode: {'ABS' if absolute_mode else 'REL'}"]
+        if endstop_x and endstop_y: status_info.append(f"Endstops: X={'TRIG' if endstop_x.is_active else 'open'}, Y={'TRIG' if endstop_y.is_active else 'open'}")
         input_prompt_text = "Manuel > "
-        # Use the renamed draw function
         draw_manual_mode_ui(stdscr, header, status_info, last_command_output, input_prompt_text) 
-        
         input_line_y = stdscr.getmaxyx()[0] - 1 
-        
         try:
             if input_line_y > 0 and input_line_y > (len(header) + len(status_info) +2) : 
-                 stdscr.move(input_line_y, len(input_prompt_text)) 
-                 curses.echo() 
-                 cmd_line_bytes = stdscr.getstr(input_line_y, len(input_prompt_text), 120) 
-                 curses.noecho() 
-                 cmd_line = cmd_line_bytes.decode('utf-8').strip()
-            else: 
-                cmd_line = "" 
-                last_command_output = ["Terminal too small. Resize or type 'MENU'."]
-
+                 stdscr.move(input_line_y, len(input_prompt_text)); curses.echo() 
+                 cmd_line = stdscr.getstr(input_line_y, len(input_prompt_text), 120).decode('utf-8').strip(); curses.noecho() 
+            else: cmd_line = ""; last_command_output = ["Terminal too small. Resize or type 'MENU'."]
             if not cmd_line: 
-                if not last_command_output or (last_command_output and last_command_output[-1] != "Terminal too small. Resize or type 'MENU'."):
-                    last_command_output = [] 
+                if not last_command_output or (last_command_output and last_command_output[-1] != "Terminal too small. Resize or type 'MENU'." ): last_command_output = [] 
                 continue
-            
-            # parse_command_and_execute now returns (messages, should_continue_manual_mode)
             last_command_output, running_manual_mode = parse_command_and_execute(cmd_line)
-
-        except curses.error as e:
-            curses.noecho() 
-            last_command_output = [f"Curses error: {e}", "Try resizing terminal or type 'MENU'."]
-        except KeyboardInterrupt: # Ctrl+C in manual mode will go back to main menu
-            curses.noecho() 
-            last_command_output = ["Keyboard interrupt. Returning to main menu..."]
-            running_manual_mode = False # Signal to exit manual mode
-        except Exception as e: 
-            curses.noecho() 
-            last_command_output = [
-                f"An unexpected error occurred: {e}",
-                "Check command syntax or internal logic."
-            ]
-    
-    # When manual_mode_loop finishes, it returns to the _main_menu_loop
-    last_command_output = [] # Clear output for next time we enter
+        except curses.error as e: curses.noecho(); last_command_output = [f"Curses error: {e}", "Try resize or 'MENU'."]
+        except KeyboardInterrupt: curses.noecho(); last_command_output = ["Interruption. Retour au menu..."]; running_manual_mode = False
+        except Exception as e: curses.noecho(); last_command_output = [f"Erreur: {e}", "Vérifiez la commande."]
+    last_command_output = []
 
 
-# --- NEW: Main Menu Functions ---
-def draw_main_menu_ui(stdscr, menu_items, selected_idx, status_message=""):
-    """Draws the main SIMUFLY menu."""
+# --- Curses Input Helper Functions ---
+def _get_string_input_curses(stdscr, y, x, prompt_text, max_len=50):
+    """Gets a string input from the user in a curses window."""
+    stdscr.addstr(y, x, prompt_text)
+    stdscr.clrtoeol() # Clear anything after the prompt
+    curses.echo()
+    stdscr.move(y, x + len(prompt_text))
+    input_bytes = stdscr.getstr(y, x + len(prompt_text), max_len)
+    curses.noecho()
+    return input_bytes.decode('utf-8').strip()
+
+def _get_int_input_curses(stdscr, y, x, prompt_text, min_val=None, max_val=None):
+    """Gets an integer input, validates, and returns it or None."""
+    while True:
+        input_str = _get_string_input_curses(stdscr, y, x, prompt_text, 20)
+        if not input_str: # User pressed Enter on empty
+            return None 
+        try:
+            val = int(input_str)
+            if (min_val is not None and val < min_val) or \
+               (max_val is not None and val > max_val):
+                range_err = f" (Doit être entre {min_val} et {max_val})" if min_val is not None and max_val is not None \
+                       else f" (Doit être >= {min_val})" if min_val is not None \
+                       else f" (Doit être <= {max_val})" if max_val is not None \
+                       else ""
+                stdscr.addstr(y + 1, x, f"Valeur invalide{range_err}. Réessayez ou ESC.")
+                stdscr.clrtoeol()
+                stdscr.refresh()
+                key = stdscr.getch() # Wait for a key press before trying again
+                if key == 27: return None # ESC to cancel
+                stdscr.move(y + 1, x); stdscr.clrtoeol() # Clear error
+                continue
+            return val
+        except ValueError:
+            stdscr.addstr(y + 1, x, "Entrée numérique invalide. Réessayez ou ESC.")
+            stdscr.clrtoeol()
+            stdscr.refresh()
+            key = stdscr.getch()
+            if key == 27: return None # ESC to cancel
+            stdscr.move(y + 1, x); stdscr.clrtoeol() # Clear error
+
+
+# --- NEW: Automatic Mode Functions ---
+def draw_automatic_mode_ui(stdscr, title, prompts, current_values, status_message="", help_message=""):
+    """Draws the UI for the automatic mode."""
     stdscr.clear()
     h, w = stdscr.getmaxyx()
 
-    title = "-- SIMUFLY --"
+    # Title
     stdscr.addstr(1, (w - len(title)) // 2, title, curses.A_BOLD)
     stdscr.addstr(2, (w - len(title)) // 2, "-" * len(title))
 
-    for idx, item_text in enumerate(menu_items):
-        x = (w - len(item_text)) // 2
-        y = 4 + idx * 2 # Add some spacing
-        if idx == selected_idx:
-            stdscr.attron(curses.A_REVERSE)
-            stdscr.addstr(y, x, item_text)
-            stdscr.attroff(curses.A_REVERSE)
-        else:
-            stdscr.addstr(y, x, item_text)
+    # Prompts and current values
+    line_y = 4
+    for i, prompt in enumerate(prompts):
+        val_str = str(current_values.get(prompt, "..."))
+        display_str = f"{prompt}: {val_str}"
+        stdscr.addstr(line_y + i, 2, display_str[:w-3])
 
+    # Status Message
     if status_message:
-        stdscr.addstr(h - 2, 1, status_message[:w-2])
+        stdscr.addstr(h - 3, 1, status_message[:w-2], curses.A_REVERSE if "Erreur" in status_message else curses.A_NORMAL)
     
-    stdscr.addstr(h - 1, 1, "Utilisez les flèches HAUT/BAS et ENTRÉE pour sélectionner. 'Q' pour quitter.")
+    # Help Message
+    if help_message:
+         stdscr.addstr(h - 2, 1, help_message[:w-2])
+    else:
+        stdscr.addstr(h - 2, 1, "ESC pour retourner au menu principal."[:w-2])
+
+    stdscr.refresh()
+
+def _automatic_mode_loop(stdscr):
+    """Main loop for the Automatic Mode UI and logic."""
+    curses.curs_set(1) # Show cursor for input
+    stdscr.keypad(True) # Enable keypad for ESC, etc.
+    
+    project_name = ""
+    project_path = ""
+    num_positions = None
+    images_per_position = None
+    
+    # State machine for input stages
+    # STAGES: GET_PROJECT_NAME, GET_NUM_POSITIONS, GET_IMAGES_PER_POS, CONFIRM, RUNNING, DONE
+    current_stage_idx = 0
+    stages = ["GET_PROJECT_NAME", "GET_NUM_POSITIONS", "GET_IMAGES_PER_POS", "CONFIRM_SETUP"] # Add more later
+
+    # Store entered values
+    config_values = {}
+    status_msg = "Initialisation du mode automatique..."
+    error_msg = ""
+
+    while True:
+        current_stage = stages[current_stage_idx]
+        
+        prompts_display = [
+            "Nom du Projet", 
+            "Chemin du Projet",
+            "Nombre de Positions",
+            "Images par Position"
+        ]
+        ui_values = {
+            "Nom du Projet": project_name if project_name else "...",
+            "Chemin du Projet": project_path if project_path else "...",
+            "Nombre de Positions": str(num_positions) if num_positions is not None else "...",
+            "Images par Position": str(images_per_position) if images_per_position is not None else "..."
+        }
+
+        draw_automatic_mode_ui(stdscr, "-- Mode Automatique --", prompts_display, ui_values, status_msg, 
+                               "Entrez les informations. ESC pour annuler l'entrée actuelle ou quitter.")
+        
+        # Clear previous error messages before new input
+        if error_msg:
+            h,w = stdscr.getmaxyx()
+            stdscr.move(h-4, 1); stdscr.clrtoeol() # Assuming error was line above status
+            error_msg = ""
+            stdscr.refresh()
+
+
+        input_y_offset = len(prompts_display) + 5 
+
+        if current_stage == "GET_PROJECT_NAME":
+            status_msg = "Entrez le nom du projet."
+            draw_automatic_mode_ui(stdscr, "-- Mode Automatique --", prompts_display, ui_values, status_msg)
+            
+            temp_name = _get_string_input_curses(stdscr, input_y_offset, 2, "Nom du Projet: ")
+            if temp_name is None: # ESC pressed in helper
+                status_msg = "Annulation... Retour au menu principal."
+                draw_automatic_mode_ui(stdscr, "-- Mode Automatique --", prompts_display, ui_values, status_msg)
+                time.sleep(0.5); break 
+            if not temp_name:
+                status_msg = "Erreur: Le nom du projet ne peut pas être vide."
+                continue
+
+            project_name = temp_name
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            # Sanitize project_name for directory creation if needed (e.g., remove invalid chars)
+            # For simplicity, we assume a reasonable project name for now.
+            project_folder_name = f"{project_name}_{timestamp}"
+            # For now, create in current directory. Could be configurable.
+            project_path = os.path.join(".", project_folder_name) # Or a predefined base path
+            
+            try:
+                os.makedirs(project_path, exist_ok=True)
+                status_msg = f"Dossier projet créé: {project_path}"
+                config_values["project_name"] = project_name
+                config_values["project_path"] = project_path
+                current_stage_idx += 1
+            except OSError as e:
+                status_msg = f"Erreur: Impossible de créer le dossier {project_path}: {e}"
+                project_name = "" # Reset on error
+                project_path = ""
+                # Stay in this stage
+
+        elif current_stage == "GET_NUM_POSITIONS":
+            status_msg = "Entrez le nombre de positions différentes."
+            draw_automatic_mode_ui(stdscr, "-- Mode Automatique --", prompts_display, ui_values, status_msg)
+
+            temp_num_pos = _get_int_input_curses(stdscr, input_y_offset, 2, "Nombre de Positions (ex: 3): ", min_val=1)
+            if temp_num_pos is None: # ESC or invalid after prompt
+                 status_msg = "Annulation... Retour au menu principal."
+                 draw_automatic_mode_ui(stdscr, "-- Mode Automatique --", prompts_display, ui_values, status_msg)
+                 time.sleep(0.5); break
+            
+            num_positions = temp_num_pos
+            config_values["num_positions"] = num_positions
+            current_stage_idx += 1
+            
+        elif current_stage == "GET_IMAGES_PER_POS":
+            status_msg = "Entrez le nombre d'images à capturer par position."
+            draw_automatic_mode_ui(stdscr, "-- Mode Automatique --", prompts_display, ui_values, status_msg)
+
+            temp_imgs_per_pos = _get_int_input_curses(stdscr, input_y_offset, 2, "Images par Position (ex: 1): ", min_val=1)
+            if temp_imgs_per_pos is None: # ESC or invalid
+                 status_msg = "Annulation... Retour au menu principal."
+                 draw_automatic_mode_ui(stdscr, "-- Mode Automatique --", prompts_display, ui_values, status_msg)
+                 time.sleep(0.5); break
+                 
+            images_per_position = temp_imgs_per_pos
+            config_values["images_per_position"] = images_per_position
+            current_stage_idx += 1
+
+        elif current_stage == "CONFIRM_SETUP":
+            status_msg = f"Configuration: {project_name}, {num_positions} positions, {images_per_position} img/pos. 'Entrée' pour continuer, 'ESC' pour annuler."
+            draw_automatic_mode_ui(stdscr, "-- Mode Automatique --", prompts_display, ui_values, status_msg,
+                                   "'Entrée' pour démarrer la définition des positions. 'ESC' pour retourner au menu.")
+            stdscr.nodelay(False) # Wait for key press
+            key = stdscr.getch()
+            if key == 27 or key == ord('q') or key == ord('Q'): # ESC or Q
+                status_msg = "Configuration annulée. Retour au menu."
+                draw_automatic_mode_ui(stdscr, "-- Mode Automatique --", prompts_display, ui_values, status_msg)
+                time.sleep(1); break
+            elif key == curses.KEY_ENTER or key in [10, 13]:
+                # Here we would move to the next phase: defining positions, then running.
+                # For now, just acknowledge and prepare to exit this simplified loop.
+                status_msg = "Configuration acceptée. (Prochaine étape: définition des positions - non implémenté)"
+                draw_automatic_mode_ui(stdscr, "-- Mode Automatique --", prompts_display, ui_values, status_msg)
+                time.sleep(2) 
+                # In a full implementation, you'd set current_stage_idx to the next logical step.
+                # For this request, we'll break and return to main menu.
+                break # End of current request fulfillment
+            
+
+    # Cleanup before returning
+    curses.curs_set(0)
+    stdscr.keypad(True) # Main menu expects keypad
+    return f"Mode Auto: {project_name}" if project_name else "Mode Auto quitté."
+
+
+# --- Main Menu Functions ---
+def draw_main_menu_ui(stdscr, menu_items, selected_idx, status_message=""):
+    stdscr.clear(); h, w = stdscr.getmaxyx()
+    title = "-- SIMUFLY --"; stdscr.addstr(1, (w - len(title)) // 2, title, curses.A_BOLD)
+    stdscr.addstr(2, (w - len(title)) // 2, "-" * len(title))
+    for idx, item_text in enumerate(menu_items):
+        x = (w - len(item_text)) // 2; y = 4 + idx * 2
+        if idx == selected_idx: stdscr.attron(curses.A_REVERSE); stdscr.addstr(y, x, item_text); stdscr.attroff(curses.A_REVERSE)
+        else: stdscr.addstr(y, x, item_text)
+    if status_message: stdscr.addstr(h - 2, 1, status_message[:w-2])
+    stdscr.addstr(h - 1, 1, "HAUT/BAS/ENTRÉE pour sélectionner. 'Q' pour quitter.")
     stdscr.refresh()
 
 def _main_menu_loop(stdscr):
-    """Main loop for the SIMUFLY application menu."""
-    global last_command_output # To display messages from sub-processes if any in future
-    
-    curses.curs_set(0) # Hide cursor for menu
-    stdscr.keypad(True) # Enable keypad for arrow keys
-    
-    menu_items = [
-        "Mode automatique",
-        "Mode manuel",
-        "Charger un fichier",
-        "Démonstration",
-        "Quitter SimuFly"
-    ]
+    global last_command_output 
+    curses.curs_set(0); stdscr.keypad(True)
+    menu_items = ["Mode automatique", "Mode manuel", "Charger un fichier", "Démonstration", "Quitter SimuFly"]
     current_selection = 0
-    status_msg = f"GPIO {'OK' if 'pul_device_m1' in globals() and pul_device_m1 else 'ERREUR'}. Position: X={current_x_mm:.1f}, Y={current_y_mm:.1f}"
-
+    status_msg = f"GPIO {'OK' if pul_device_m1 else 'ERREUR'}. Pos: X={current_x_mm:.1f}, Y={current_y_mm:.1f}"
 
     while True:
         draw_main_menu_ui(stdscr, menu_items, current_selection, status_msg)
         key = stdscr.getch()
-
-        if key == curses.KEY_UP:
-            current_selection = (current_selection - 1 + len(menu_items)) % len(menu_items)
-        elif key == curses.KEY_DOWN:
-            current_selection = (current_selection + 1) % len(menu_items)
+        if key == curses.KEY_UP: current_selection = (current_selection - 1 + len(menu_items)) % len(menu_items)
+        elif key == curses.KEY_DOWN: current_selection = (current_selection + 1) % len(menu_items)
         elif key == ord('q') or key == ord('Q'):
-            status_msg = "Quitting SimuFly..."
-            draw_main_menu_ui(stdscr, menu_items, current_selection, status_msg) # Show quitting message
-            time.sleep(0.5)
-            break 
+            status_msg = "Quitting SimuFly..."; draw_main_menu_ui(stdscr, menu_items, current_selection, status_msg); time.sleep(0.5); break 
         elif key == curses.KEY_ENTER or key in [10, 13]:
             selected_option = menu_items[current_selection]
-
             if selected_option == "Mode manuel":
-                status_msg = "Lancement du Mode Manuel..."
-                draw_main_menu_ui(stdscr, menu_items, current_selection, status_msg)
-                time.sleep(0.2) # Brief pause to show message
-                _manual_mode_loop(stdscr) # Call the renamed manual mode loop
-                # After returning from manual mode:
-                curses.curs_set(0) # Re-hide cursor
-                stdscr.keypad(True) # Re-enable keypad for main menu
-                status_msg = f"Retour du Mode Manuel. Position: X={current_x_mm:.1f}, Y={current_y_mm:.1f}"
-                last_command_output = [] # Clear any lingering messages
+                status_msg = "Lancement Mode Manuel..."; draw_main_menu_ui(stdscr, menu_items, current_selection, status_msg); time.sleep(0.2)
+                _manual_mode_loop(stdscr)
+                curses.curs_set(0); stdscr.keypad(True)
+                status_msg = f"Retour du Mode Manuel. Pos: X={current_x_mm:.1f}, Y={current_y_mm:.1f}"; last_command_output = []
+            # --- NEW: Handle Automatic Mode ---
+            elif selected_option == "Mode automatique":
+                status_msg = "Lancement Mode Automatique..."; draw_main_menu_ui(stdscr, menu_items, current_selection, status_msg); time.sleep(0.2)
+                auto_mode_status = _automatic_mode_loop(stdscr) # Call the automatic mode loop
+                curses.curs_set(0); stdscr.keypad(True) # Restore curses settings for main menu
+                status_msg = f"{auto_mode_status} Pos: X={current_x_mm:.1f}, Y={current_y_mm:.1f}"
+                last_command_output = []
             elif selected_option == "Quitter SimuFly":
-                status_msg = "Quitting SimuFly..."
-                draw_main_menu_ui(stdscr, menu_items, current_selection, status_msg)
-                time.sleep(0.5)
-                break 
+                status_msg = "Quitting SimuFly..."; draw_main_menu_ui(stdscr, menu_items, current_selection, status_msg); time.sleep(0.5); break 
             else:
-                # Placeholder for other menu items
                 status_msg = f"Option '{selected_option}' non implémentée."
-                # Redraw to show status_msg immediately
-                draw_main_menu_ui(stdscr, menu_items, current_selection, status_msg)
-                stdscr.timeout(1500) # Display message for 1.5 seconds
-                stdscr.getch() # Consume any key press during timeout
-                stdscr.timeout(-1) # Disable timeout
-                status_msg = f"Position: X={current_x_mm:.1f}, Y={current_y_mm:.1f}" # Reset status
-
-        else:
-            status_msg = f"Position: X={current_x_mm:.1f}, Y={current_y_mm:.1f}"
-
+                draw_main_menu_ui(stdscr, menu_items, current_selection, status_msg); stdscr.timeout(1500); stdscr.getch(); stdscr.timeout(-1)
+                status_msg = f"Pos: X={current_x_mm:.1f}, Y={current_y_mm:.1f}"
+        else: status_msg = f"Pos: X={current_x_mm:.1f}, Y={current_y_mm:.1f}"
 
 if __name__ == "__main__":
     gpio_ok = setup_gpio()
-    if gpio_ok:
-        print("GPIO initialisé. Lancement de l'interface SimuFly Curses...")
-    else:
-        print("ERREUR: Échec de l'initialisation GPIO. L'interface Curses ne démarrera pas les fonctionnalités moteur.")
-        # Allow curses interface to start anyway to show errors or for non-GPIO functions
-        # If you want to exit here, add: sys.exit(1)
-
-    # Brief pause to let user see console messages before curses takes over
+    if gpio_ok: print("GPIO initialisé. Lancement SimuFly Curses...")
+    else: print("ERREUR: Init GPIO échouée. Interface Curses démarrera sans fonctions moteur.")
     time.sleep(0.1)
-
     try:
-        # Call the NEW main menu loop with curses.wrapper
         curses.wrapper(_main_menu_loop)
     except Exception as e: 
-        # This will be caught if curses.wrapper itself fails or unhandled exception in _main_menu_loop
-        print(f"Une erreur critique est survenue en dehors de la boucle principale de Curses: {e}")
-        import traceback
-        traceback.print_exc()
+        print(f"Erreur critique hors boucle Curses: {e}")
+        import traceback; traceback.print_exc()
     finally:
-        print("Nettoyage du GPIO avant de quitter...") 
-        cleanup_gpio() 
-        print("Programme SimuFly terminé.")
+        print("Nettoyage GPIO avant de quitter..."); cleanup_gpio(); print("SimuFly terminé.")
