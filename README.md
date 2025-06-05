@@ -57,3 +57,24 @@ Maintenant, il nous faut nous connecter via VNC au Raspberry Pi :
    - **Mot de passe** : drone2025
 
 Vous devriez maintenant voir l'interface graphique du Raspberry Pi sur votre écran !
+
+
+###
+
+# Marche à suivre pour utiliser le programme
+
+Le programme est en principe déjà présent sur le Raspberry Pi au chemin _/SIMUFLY/simufly.py_ et peut être exécuté avec la commande :
+
+```bash
+python3 simufly.py
+```
+
+Cependant, si le programme n'est pas présent, il suffit de cloner le répertoire GitHub avec la commande : 
+
+```bash
+git clone https://github.com/dossantosyann/SIMUFLY.git
+```
+
+Si des dépendances sont manquantes, installez-les.
+
+Le programme se contrôle à l'aide de lignes de commandes et des flèches du clavier pour naviguer les menus.
