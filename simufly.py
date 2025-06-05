@@ -1548,7 +1548,7 @@ def _main_menu_loop(stdscr):
     global last_command_output, current_x_mm, current_y_mm 
     curses.curs_set(0); stdscr.keypad(True)
     # MODIFIED: Added "Charger un fichier"
-    menu_items = ["Mode automatique", "Mode manuel", "Charger un fichier", "Démonstration", "Quitter SimuFly"]
+    menu_items = ["Mode automatique", "Mode manuel", "Charger un fichier", "Quitter SimuFly"]
     current_selection = 0
     status_msg = f"GPIO {'OK' if pul_device_m1 else 'ERREUR'}. Pos: X={current_x_mm:.1f}, Y={current_y_mm:.1f}"
 
