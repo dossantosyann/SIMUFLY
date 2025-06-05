@@ -1,118 +1,59 @@
-# Simulateur-de-prise-de-vue-par-drone
+# Marche à suivre pour se connecter au Raspberry Pi
 
-# Notes perso
-Ce sont les notes que j'ai (Yann) pris lors de mes recherches pour la création du logicielle. Les étapes présentes sont écrites dans l'ordre chonologique où je les ai exécutées
+Pour se connecter au Raspberry Pi, il existe plusieurs méthodes.
 
-## Sources
-[Création du projet Flask + React à l'aide de Vite](https://www.youtube.com/watch?v=ctQMqqEo4G8)
+## Connexion physique
 
-[Build du projet Flask + React pour déploiement](https://www.youtube.com/watch?v=tvcWCQqLegM)
+La première, et la plus simple, est de connecter un écran, un clavier et une souris à l'ordinateur et de le contrôler de cette façon.
 
-[Contrôle de la webcam avec OpenCV](https://www.youtube.com/watch?v=sd25t4HmFdU)
+## Connexion via SSH
 
-# Création du projet Flask + React
+La deuxième, est de se connecter en SSH au Raspberry Pi. Pour ce faire, une fois que ce dernier est alimenté, il va générer un point d'accès Wi-Fi appelé **pi5hotspot** dont le mot de passe est **drone2025**. Une fois connecté à ce réseau, à l'aide d'un terminal, scannez les différents appareils connectés au réseau et identifiez l'adresse IP du Raspberry Pi.
 
-## Création frontend (client), projet React via Vite :
-```bash
-npx create-vite 
--> React
--> Javascript
-cd "dossier"
-npm install
-npm run dev
-```
-
-## Création backend (server), python Flask :
-```bash
-python3 -m venv venv
-source venv/bin/activate
-pip3 install flask
--> créer main.py
-```
-
-## Installer flask-cors :
-```bash
-pip3 install Flask-CORS
-```
-
-## Importer cors dans backend :
-Dans le fichier main.py ajouter : 
-```python 
-from flask_cors import CORS
-```
-
-## Installer axios :
+Avec ces informations, nous pouvons maintenant nous connecter en SSH avec la commande :
 
 ```bash
-npm install axios
+ssh pi5@<IP ADDRESS>
 ```
 
-## Importer useEffect dans frontend :
-Dans le fichier client/src/app, modifier la première ligne pour ajouter la librairie useEffect : 
-```jsx
-import { useState, useEffect } from 'react'
-```
-# Build du projet pour déploiement
+Cette connexion nous permet de contrôler le Raspberry Pi via le terminal et de lancer notre programme qui est entièrement géré en lignes de commandes, c'est parfait !
 
-### Frontend :
-```bash
-npm run build
-```
-### Backend :
-Dans le fichier main.py :
-```python
-from flask import Flask, jsonify, send_from_directory
+## Connexion via VNC
 
+Alternativement, il est également possible de se connecter graphiquement au Raspberry Pi, c'est-à-dire d'utiliser n'importe quel PC comme écran pour le Raspberry, avec le protocole VNC. Pour ce faire, si ce n'est pas déjà activé, il faut activer le VNC du Raspberry. Pour cela, connectez-vous en SSH comme expliqué précédemment et suivez les instructions suivantes :
 
-@app.route("/")
-def home():
-    return send_from_directory(app.static_folder, "index.html")
+1. Ouvrez l'outil de configuration du Raspberry Pi :
 
-```
+   ```bash
+   sudo raspi-config
+   ```
 
-### Lancer le serveur
-```bash
-python3 main.py
-```
+2. Naviguez dans le menu avec les flèches du clavier :
+   - Sélectionnez **3 Interface Options**
+   - Puis **I3 VNC**
+   - Choisissez **Yes** pour activer le serveur VNC
+   - Confirmez avec **OK**
 
-# Installation de Tailwindcss
-Tailwind sera utilisé plus tard pour l'interface, mais l'installation a déjà été effectuée.
+3. Redémarrez le Raspberry Pi pour que les changements prennent effet :
 
-[Guide officiel](https://tailwindcss.com/docs/installation/using-vite)
+   ```bash
+   sudo reboot
+   ```
 
+4. Une fois redémarré, vous pouvez vérifier que le service VNC est actif :
 
+   ```bash
+   sudo systemctl status vncserver-x11-serviced
+   ```
 
-# Gestion de la webcam
+Maintenant, il nous faut nous connecter via VNC au Raspberry Pi :
 
-## Installation d'OpenCV en Python
-```bash
-pip3 install opencv-python
-```
+1. Téléchargez et installez un client VNC sur votre ordinateur (par exemple VNC Viewer de RealVNC)
 
+2. Ouvrez le client VNC et créez une nouvelle connexion avec l'adresse IP du Raspberry Pi (la même que pour SSH)
 
+3. Connectez-vous avec les identifiants du Raspberry Pi :
+   - **Nom d'utilisateur** : pi5
+   - **Mot de passe** : drone2025
 
-
-
-# Installation Windows fraîche
-WSL ne permet pas d'utiliser une Webcam, il faut programmer du python directement dans Windows.
-
-J'ai refait une installation fraîche de Windows, voici tout ce que j'ai du installer dans l'ordre pour que ça fonctionne :
-```bash
-wsl --install
-sudo apt install python3-venv
-pip install opencv-python
-```
-À partir de là, la webcam ne semblait pas fonctionner à travers WSL. J'ai donc installé usbipd-win pour pouvoir accorder l'accès à mon port USB à WSL (je n'ai pas eu ce soucis sur MacOS).
-
-https://github.com/dorssel/usbipd-win
-
-```bash
-winget install usbipd (dans CMD Windows)
-
-
-usbipd list
-usbipd bind --busid=<BUSID>
-usbipd attach --wsl --busid=X-X
-```
-
-J'ai ensuite utilisé lsusb de usb-utils pour afficher la liste des périphériques USB connectés
+Vous devriez maintenant voir l'interface graphique du Raspberry Pi sur votre écran !
