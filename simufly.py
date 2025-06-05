@@ -2,12 +2,12 @@ import gpiozero
 import time
 import math
 import re # For command parsing
-import curses # <-- Ajout pour l'interface CLI améliorée
-import cv2 # <-- Added for OpenCV webcam capture
-import os # <-- Added for path manipulation
+import curses 
+import cv2
+import os 
 import sys
 from contextlib import contextmanager
-from datetime import datetime # <-- Added for timestamp in automatic mode
+from datetime import datetime 
 import csv
 
 # --- Gestionnaire de contexte pour supprimer les messages stderr de bas niveau ---
@@ -37,7 +37,7 @@ DIR_PIN_M1 = 5
 PUL_PIN_M2 = 27
 DIR_PIN_M2 = 17
 
-# --- NEW: Endstop GPIO Pin Configuration ---
+# --- Endstop GPIO Pin Configuration ---
 ENDSTOP_PIN_X = 16 # For X-axis
 ENDSTOP_PIN_Y = 26 # For Y-axis
 
@@ -46,7 +46,7 @@ pul_device_m1 = None
 dir_device_m1 = None
 pul_device_m2 = None
 dir_device_m2 = None
-# --- NEW: Endstop Device Objects ---
+# --- Endstop Device Objects ---
 endstop_x = None
 endstop_y = None
 
@@ -954,10 +954,6 @@ def _execute_automatic_scan(stdscr, project_path, positions_list,
             time_for_home_move = home_path_len / homing_speed_actual
             _dx_steps_cart_h = round(-delta_x_to_home * MICROSTEPS_PER_MM)
             _dy_steps_cart_h = round(delta_y_to_home * MICROSTEPS_PER_MM)
-            # _steps_m1_h = _dx_steps_cart_h + _dy_steps_cart_h # Original
-            # _steps_m2_h = _dy_steps_cart_h - _dx_steps_cart_h # Correction ici pour CoreXY -> Non, c'est dans move_corexy
-                                                              # move_corexy attend les deltas cartésiens
-            # La logique de conversion des deltas cartésiens en steps moteur est dans move_corexy
             num_iter_h = max(abs(int(round(-delta_x_to_home * MICROSTEPS_PER_MM) + round(delta_y_to_home * MICROSTEPS_PER_MM))), 
                                abs(int(round(-delta_x_to_home * MICROSTEPS_PER_MM) - round(delta_y_to_home * MICROSTEPS_PER_MM))))
 
@@ -1128,7 +1124,7 @@ def _automatic_mode_loop(stdscr):
     return return_message
 
 
-# --- NEW: Load File Mode Functions ---
+# --- Load File Mode Functions ---
 def draw_load_file_ui(stdscr, title, info_dict, status_message="", help_message=""):
     """Draws the UI for the load file mode."""
     stdscr.clear()
@@ -1547,7 +1543,6 @@ def draw_main_menu_ui(stdscr, menu_items, selected_idx, status_message=""):
 def _main_menu_loop(stdscr):
     global last_command_output, current_x_mm, current_y_mm 
     curses.curs_set(0); stdscr.keypad(True)
-    # MODIFIED: Added "Charger un fichier"
     menu_items = ["Mode automatique", "Mode manuel", "Charger un fichier", "Quitter SimuFly"]
     current_selection = 0
     status_msg = f"GPIO {'OK' if pul_device_m1 else 'ERREUR'}. Pos: X={current_x_mm:.1f}, Y={current_y_mm:.1f}"
@@ -1571,7 +1566,7 @@ def _main_menu_loop(stdscr):
                 auto_mode_status = _automatic_mode_loop(stdscr) 
                 curses.curs_set(0); stdscr.keypad(True) 
                 status_msg = f"{auto_mode_status} Pos: X={current_x_mm:.1f}, Y={current_y_mm:.1f}"; last_command_output = []
-            # --- NEW: Handle Load File Mode ---
+            # --- Handle Load File Mode ---
             elif selected_option == "Charger un fichier":
                 status_msg = "Lancement Mode Charger Fichier..."; draw_main_menu_ui(stdscr, menu_items, current_selection, status_msg); time.sleep(0.2)
                 load_file_status = _load_file_mode_loop(stdscr) # Call the new load file mode loop
