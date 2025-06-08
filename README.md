@@ -1,3 +1,37 @@
+# Mode manuel
+
+## Liste des commandes et leur description
+
+1. **MOVE X Y [S]** : Se déplace en XY à vitesse S en mm/s. Cette commande peut être utilisée en mode absolu ou relatif. La vitesse mise en argument n'est utilisée que pour un déplacement.
+   
+   Exemples :
+   - MOVE X200 Y350
+   - MOVE X500
+   - MOVE X300 Y300 S250
+   - MOVE X-150 Y-200 (mode relatif uniquement)
+
+2. **ABS** : Définit le mode de déplacement en coordonnées absolues.
+
+3. **REL** : Définit le mode de déplacement en coordonnées relatives.
+
+4. **HOME** : Déplace la caméra à l'origine au point (0,0).
+
+5. **SETHOME** : Cette commande définit la position physique actuelle de la caméra comme l'origine (0,0). Attention, les limites de déplacement de la nacelle ne sont pas mises à jour après l'utilisation de cette commande. Il est donc impératif de veiller à ne pas endommager les moteurs en leur demandant de se déplacer en dehors des zones permises par le cadre.
+
+6. **CAL** : Calibre l'origine (0,0) à l'aide des capteurs fin de course.
+
+7. **Capture [PATH]** : Capture et enregistre l'image au chemin indiqué.
+
+8. **S** : Définit la vitesse pour tous les prochains déplacements en mm/s.
+
+9. **LIMITS [ON/OFF]** : Active ou désactive les limites de position de la caméra. ATTENTION à ne pas endommager le système en désactivant les limites.
+
+10. **POS** : Affiche les paramètres actuels du système.
+
+11. **MENU/EXIT** : Retourne au menu principal.
+
+
+
 # Marche à suivre pour se connecter au Raspberry Pi
 
 Pour se connecter au Raspberry Pi, il existe plusieurs méthodes.
